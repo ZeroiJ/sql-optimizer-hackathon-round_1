@@ -5,5 +5,4 @@ __pycache__/
 *.egg
 .sisyphus/
 AGENTS.md
-ENVIRONMENT_DESIGN.md
 HACKATHON_RULES.md
