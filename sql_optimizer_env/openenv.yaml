@@ -1,0 +1,45 @@
+spec_version: 1
+name: sql-query-optimizer
+description: "An OpenEnv environment where an AI agent must fix and optimize SQL queries against a real SQLite e-commerce database."
+version: "1.0.0"
+author: Team
+tags:
+  - sql
+  - database
+  - optimization
+  - real-world
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+
+observation_space:
+  type: object
+  fields:
+    task_id: string
+    schema_description: string
+    broken_query: string
+    error_message: string | null
+    current_score: float
+    attempts: integer
+    max_attempts: integer
+
+action_space:
+  type: object
+  fields:
+    query: string
+
+reward_range: [-1.0, 1.0]
+
+tasks:
+  - id: easy_fix_select
+    difficulty: easy
+    max_attempts: 5
+  - id: medium_slow_join
+    difficulty: medium
+    max_attempts: 7
+  - id: hard_subquery_optimize
+    difficulty: hard
+    max_attempts: 10
+
+entry_point: server.sql_optimizer_environment:SQLOptimizerEnvironment

@@ -1,0 +1,41 @@
+# SQL Query Optimizer - OpenEnv RL Environment
+# For the Meta PyTorch Hackathon
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-sql-optimizer-env"
+version = "0.1.0"
+description = "SQL Query Optimizer RL Environment - teaches LLM agents to optimize SQL queries and suggest indices"
+requires-python = ">=3.10"
+authors = [
+    {name = "PyTorch Hackathon Team"}
+]
+dependencies = [
+    # Core OpenEnv dependencies (required for server functionality)
+    "openenv-core[core]>=0.2.2",
+    "fastapi>=0.115.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
+    "requests>=2.31.0",
+    "huggingface-hub>=0.20.0",
+    "transformers>=4.36.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+# Server entry point - enables running via: uv run --project . server
+server = "sql_optimizer_env.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["sql_optimizer_env", "sql_optimizer_env.server"]
+package-dir = { "sql_optimizer_env" = ".", "sql_optimizer_env.server" = "server" }

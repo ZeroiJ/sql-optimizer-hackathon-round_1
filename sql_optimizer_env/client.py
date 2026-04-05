@@ -1,0 +1,35 @@
+from openenv.core.env_client import EnvClient
+from openenv.core.client_types import StepResult
+from openenv.core.env_server.types import State
+from .models import SQLAction, SQLObservation
+
+
+class SQLOptimizerEnv(EnvClient[SQLAction, SQLObservation, State]):
+    def _step_payload(self, action: SQLAction) -> dict:
+        return {"query": action.query}
+
+    def _parse_result(self, payload: dict) -> StepResult[SQLObservation]:
+        obs_data = payload.get("observation", {})
+        obs = SQLObservation(
+            task_id=obs_data.get("task_id", ""),
+            schema_description=obs_data.get("schema_description", ""),
+            broken_query=obs_data.get("broken_query", ""),
+            error_message=obs_data.get("error_message"),
+            current_score=obs_data.get("current_score", 0.0),
+            attempts=obs_data.get("attempts", 0),
+            max_attempts=obs_data.get("max_attempts", 5),
+            done=payload.get("done", False),
+            reward=payload.get("reward"),
+            metadata=obs_data.get("metadata", {}),
+        )
+        return StepResult(
+            observation=obs,
+            reward=payload.get("reward"),
+            done=payload.get("done", False),
+        )
+
+    def _parse_state(self, payload: dict) -> State:
+        return State(
+            episode_id=payload.get("episode_id"),
+            step_count=payload.get("step_count", 0),
+        )
