@@ -12,7 +12,15 @@ from sql_optimizer_env.models import SQLAction
 
 
 async def run_test():
-    """Run adversarial test cases against the deployed environment."""
+    """Run adversarial test cases against the deployed Hugging Face Space.
+
+    Connects to the live environment via WebSocket and submits five adversarial
+    queries (correct JOIN, index spam, SELECT 1 exploit, destructive DROP, optimal
+    single-index solution) to verify grading robustness. Prints reward breakdowns
+    and catcher messages for each test case.
+
+    No inputs. No return value. Results printed to stdout.
+    """
     print("Connecting to cloud environment...")
     env = SQLOptimizerEnv("wss://zeroij-sql-query-optimizer.hf.space")
     task_id = "medium_slow_join"
