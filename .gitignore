@@ -3,3 +3,7 @@
 __pycache__/
 *.egg-info/
 *.egg
+.sisyphus/
+AGENTS.md
+ENVIRONMENT_DESIGN.md
+HACKATHON_RULES.md

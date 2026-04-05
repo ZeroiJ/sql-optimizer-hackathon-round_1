@@ -41,23 +41,25 @@ Broken Query: SELECT custmer_id, nm, emaill FROM customers WHERE city = 'Mumbai'
 Max attempts: 5
 
 LLM Response:
-{"query": "CREATE INDEX idx_city ON customers(city); SELECT customer_id, name, email FROM customers WHERE city = 'Mumbai'"}
+{"query": "CREATE INDEX idx_city ON customers(city);"}
 
 --- Attempt 1/5 ---
-  Reward: ~0.70
-  Current Score: ~0.70
-  Correctness: 1.0
+  Reward: 0.2000
+  Current Score: 0.2000
+  Correctness: 0.0
   Efficiency: 0.0
+  is_valid_sql: 1.0
   Done: False
 ```
 
-**What happened:** Llama-3 correctly fixed the column names (`custmer_id` → `customer_id`, `nm` → `name`, `emaill` → `email`) but also injected a `CREATE INDEX` DDL statement into what should be a pure DQL task. The grader correctly:
+**What happened:** Llama-3 recognized that an index might help performance and created one — but never actually fixed the broken SELECT query. The grader correctly:
 
-1. **Awarded `correctness = 1.0`** — the result rows matched (semantic equivalence passed)
-2. **Awarded `efficiency = 0.0`** — the `EXPLAIN QUERY PLAN` cost of the submitted query (with the unnecessary index creation) was not demonstrably better than the broken query's cost
-3. **Final score: ~0.70** — `0.5 * 1.0 + 0.3 * 0.0 + 0.2 * 1.0 = 0.70`, well below the 0.95 threshold needed to complete the episode
+1. **Awarded `is_valid_sql = 1.0`** — `CREATE INDEX` is syntactically valid SQL
+2. **Awarded `correctness = 0.0`** — the broken query's result set (with wrong column names) does NOT match the expected query's result set (semantic equivalence failed)
+3. **Awarded `efficiency = 0.0`** — no improvement to the query plan of the broken query
+4. **Final score: 0.20** — `0.5 * 0.0 + 0.3 * 0.0 + 0.2 * 1.0 = 0.20`, well below the 0.95 threshold
 
-**Why this matters:** The environment doesn't just check if the query is syntactically valid SQL. It evaluates the **actual execution path** — the agent's query must produce the same rows as the expected query, and the query plan must be demonstrably better. An agent that "gets lucky" with valid SQL but wrong results scores 0.0. An agent that gets the right results but uses a suboptimal plan (or injects unnecessary DDL) scores partial credit. This is **real RL signal**, not a binary pass/fail.
+**Why this matters:** The environment doesn't just check if the submission is syntactically valid SQL. A naive grader would see `is_valid_sql = 1.0` and award partial credit. Our grader requires **semantic equivalence** — the agent's query must produce the exact same rows as the reference query. An agent that submits valid but irrelevant SQL (like a lone `CREATE INDEX`) scores 0.20. An agent that fixes the column names but misses the logic scores partial credit. An agent that produces the correct result set with a better plan scores 0.95+. This is **real RL signal**, not a binary pass/fail.
 
 ---
 

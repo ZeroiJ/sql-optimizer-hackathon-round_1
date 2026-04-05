@@ -291,15 +291,36 @@ class SQLOptimizerEnvironment(Environment):
         return expected_rows == submitted_rows, expected_rows, submitted_rows
 
     def _get_task(self, task_id: str) -> dict:
-        """Return task configuration for the given task_id."""
+        """Return task configuration dict for the given task_id.
+
+        Args:
+            task_id: One of the keys in TASKS (easy_fix_select, medium_slow_join, hard_subquery_optimize).
+
+        Returns:
+            Dict with max_attempts, broken_query, expected_query, and score_formula.
+        """
         return TASKS[task_id]
 
     def _is_destructive(self, query: str) -> bool:
-        """Check if query contains destructive SQL keywords (DROP, DELETE, etc.)."""
+        """Check if query contains destructive SQL keywords.
+
+        Args:
+            query: Raw SQL string to scan.
+
+        Returns:
+            True if query matches DROP, DELETE, TRUNCATE, ALTER, ATTACH, DETACH, REINDEX, or VACUUM.
+        """
         return bool(DESTRUCTIVE_RE.search(query))
 
     def _has_cte_or_window(self, query: str) -> bool:
-        """Detect whether query uses WITH (CTE) or window function syntax."""
+        """Detect whether query uses WITH (CTE) or window function syntax.
+
+        Args:
+            query: Raw SQL string to analyze.
+
+        Returns:
+            True if query contains WITH clause or OVER() window function.
+        """
         upper = query.upper()
         return (
             "WITH " in upper or "OVER(" in upper.replace(" ", "") or "OVER (" in upper

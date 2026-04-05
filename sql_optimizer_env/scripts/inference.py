@@ -18,10 +18,11 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sql_optimizer_env import SQLOptimizerEnv, SQLAction
+from sql_optimizer_env.models import SQLObservation
 from huggingface_hub import InferenceClient
 
 
-def build_prompt(obs) -> str:
+def build_prompt(obs: SQLObservation) -> str:
     """Construct a system prompt directing the LLM to fix a broken SQL query."""
     return f"""You are a SQL optimization expert working with a SQLite e-commerce database.
 
