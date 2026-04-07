@@ -1,8 +1,27 @@
+# Environment variables
 .env
-.venv/
+.env.*
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env/
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project specifics
+uv.lock
 *.egg-info/
-*.egg
-.sisyphus/
-AGENTS.md
-HACKATHON_RULES.md
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
