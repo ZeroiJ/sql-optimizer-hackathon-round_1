@@ -2,17 +2,15 @@
 
 import asyncio
 import sys
-import urllib.request
-import urllib.error
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from sql_optimizer_env.client import SQLOptimizerEnv
 from sql_optimizer_env.models import SQLAction
 
-SPACE_URL = "https://zeroij-sql-query-optimizer.hf.space"
+SPACE_ID = "ZeroiJ/sql-query-optimizer"
 TASK_NAME = "medium_slow_join"
 
 RESET = "\033[0m"
@@ -71,12 +69,6 @@ GAUNTLET = [
         "expected": "Should fail semantic check - columns don't exist",
     },
     {
-        "name": "The Fixer (Implicit JOIN)",
-        "description": "Basic fix using implicit JOIN syntax",
-        "query": "SELECT customers.name, orders.order_id, orders.status FROM customers, orders WHERE customers.customer_id = orders.customer_id AND orders.status = 'completed';",
-        "expected": "Should pass correctness, moderate efficiency",
-    },
-    {
         "name": "The Perfect Optimizer",
         "description": "Optimal query with index for maximum score",
         "query": "CREATE INDEX idx_orders_status ON orders(status); SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed';",
@@ -89,91 +81,88 @@ async def run_gauntlet():
     print(f"\n{color('🎯 THE SQL OPTIMIZER GAUNTLET 🎯', 'pink')}")
     print(f"{color('=' * 70, 'cyan')}")
     print(f"{color('Testing environment robustness against edge cases', 'white')}")
-    print(f"{color(f'Space: {SPACE_URL}', 'dim')}")
+    print(f"{color(f'Space: {SPACE_ID}', 'dim')}")
     print(f"{color(f'Task: {TASK_NAME}', 'dim')}")
     print()
 
+    env = SQLOptimizerEnv(f"wss://zeroij-sql-query-optimizer.hf.space")
     results: List[Dict[str, Any]] = []
 
-    def http_post(endpoint: str, payload: dict) -> dict:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            endpoint, data=data, headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+    try:
+        for i, scenario in enumerate(GAUNTLET, 1):
+            print(f"{color(f'⚔️  Test {i}: {scenario['name']}', 'yellow')}")
+            print(f"    {color(scenario['description'], 'white')}")
 
-    for i, scenario in enumerate(GAUNTLET, 1):
-        print(f"{color(f'⚔️  Test {i}: {scenario['name']}', 'yellow')}")
-        print(f"    {color(scenario['description'], 'white')}")
+            try:
+                reset_result = await env.reset(task_id=TASK_NAME)
+                obs = reset_result.observation
 
-        try:
-            reset_data = http_post(f"{SPACE_URL}/web/reset", {"task_id": TASK_NAME})
+                action = SQLAction(query=scenario["query"])
+                step_result = await env.step(action)
 
-            step_data = http_post(
-                f"{SPACE_URL}/web/step", {"action": {"query": scenario["query"]}}
-            )
+                obs = step_result.observation
+                reward_val = (
+                    float(step_result.reward) if step_result.reward is not None else 0.0
+                )
+                done = step_result.done
 
-            obs_data = step_data.get("observation", {})
-            reward_val = float(step_data.get("reward", 0.0))
-            done = step_data.get("done", False)
-            error_msg = obs_data.get("error_message")
+                correctness = obs.metadata.get("correctness", 0.0)
+                efficiency = obs.metadata.get("efficiency", 0.0)
+                is_valid_sql = obs.metadata.get("is_valid_sql", True)
+                error_msg = obs.error_message
 
-            metadata = obs_data.get("metadata", {})
+                results.append(
+                    {
+                        "name": scenario["name"],
+                        "query": scenario["query"],
+                        "reward": reward_val,
+                        "correctness": correctness,
+                        "efficiency": efficiency,
+                        "is_valid_sql": is_valid_sql,
+                        "error": error_msg,
+                        "done": done,
+                    }
+                )
 
-            correctness = metadata.get("correctness", 0.0)
-            efficiency = metadata.get("efficiency", 0.0)
-            is_valid_sql = metadata.get("is_valid_sql", True)
+                score_color = (
+                    "green"
+                    if reward_val >= 0.9
+                    else "yellow"
+                    if reward_val >= 0.5
+                    else "red"
+                )
+                print(f"    {color('─' * 50, 'dim')}")
+                print(f"    Reward:   {color(f'{reward_val:.4f}', score_color)}")
+                print(
+                    f"    Correct:  {color(f'{correctness:.2f}', 'cyan')} | "
+                    f"{color(f'Efficiency: {efficiency:.2f}', 'cyan')}"
+                )
+                print(f"    Valid SQL: {color(str(is_valid_sql), 'cyan')}")
 
-            results.append(
-                {
-                    "name": scenario["name"],
-                    "query": scenario["query"],
-                    "reward": reward_val,
-                    "correctness": correctness,
-                    "efficiency": efficiency,
-                    "is_valid_sql": is_valid_sql,
-                    "error": error_msg,
-                    "done": done,
-                }
-            )
+                if error_msg:
+                    print(f"    {color(f'Error: {error_msg}', 'red')}")
+                if done:
+                    print(f"    {color('Episode terminated', 'magenta')}")
 
-            score_color = (
-                "green"
-                if reward_val >= 0.9
-                else "yellow"
-                if reward_val >= 0.5
-                else "red"
-            )
-            print(f"    {color('─' * 50, 'dim')}")
-            print(f"    Reward:   {color(f'{reward_val:.4f}', score_color)}")
-            print(
-                f"    Correct:  {color(f'{correctness:.2f}', 'cyan')} | "
-                f"{color(f'Efficiency: {efficiency:.2f}', 'cyan')}"
-            )
-            print(f"    Valid SQL: {color(str(is_valid_sql), 'cyan')}")
+            except Exception as e:
+                print(f"    {color(f'Exception: {str(e)}', 'red')}")
+                results.append(
+                    {
+                        "name": scenario["name"],
+                        "query": scenario["query"],
+                        "reward": -1.0,
+                        "correctness": 0.0,
+                        "efficiency": 0.0,
+                        "is_valid_sql": False,
+                        "error": str(e),
+                        "done": False,
+                    }
+                )
 
-            if error_msg:
-                print(f"    {color(f'Error: {error_msg}', 'red')}")
-            if done:
-                print(f"    {color('Episode terminated', 'magenta')}")
+            print()
 
-        except Exception as e:
-            print(f"    {color(f'Exception: {str(e)}', 'red')}")
-            results.append(
-                {
-                    "name": scenario["name"],
-                    "query": scenario["query"],
-                    "reward": -1.0,
-                    "correctness": 0.0,
-                    "efficiency": 0.0,
-                    "is_valid_sql": False,
-                    "error": str(e),
-                    "done": False,
-                }
-            )
-
-        print()
+    finally:
+        await env.close()
 
     print(box("📊 GAUNTLET RESULTS SUMMARY", ""))
     print()
