@@ -11,7 +11,6 @@ from sql_optimizer_env.client import SQLOptimizerEnv
 from sql_optimizer_env.models import SQLAction
 
 SPACE_ID = "ZeroiJ/sql-query-optimizer"
-TASK_NAME = "medium_slow_join"
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -52,26 +51,54 @@ def box(title: str, content: str, width: int = 70) -> str:
 GAUNTLET = [
     {
         "name": "The Garbage Injector",
+        "task": "medium_slow_join",
         "description": "Tests SQL injection/parser robustness with random text",
         "query": "SELECT * FROM ducks WHERE quack = true; DROP DATABASE;",
         "expected": "Should reject as invalid SQL or return low reward",
     },
     {
         "name": "The Cartesian Exploder",
+        "task": "medium_slow_join",
         "description": "Tests C-level SQLite cost engine with massive unoptimized scan",
         "query": "SELECT * FROM customers CROSS JOIN orders;",
         "expected": "High cost due to cartesian product, low efficiency score",
     },
     {
         "name": "The Schema Hallucinator",
+        "task": "medium_slow_join",
         "description": "Tests semantic grader with non-existent columns",
         "query": "SELECT user_id, secret_password FROM customers WHERE status = 'active';",
         "expected": "Should fail semantic check - columns don't exist",
     },
     {
         "name": "The Perfect Optimizer",
+        "task": "medium_slow_join",
         "description": "Optimal query for maximum score",
-        "query": "SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed'"
+        "query": "SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed'",
+    },
+    {
+        "name": "The Syntax Fumbler",
+        "task": "easy_fix_select",
+        "description": "Tests syntax penalty with a typo (SELCT)",
+        "query": "SELCT customer_id, name FROM customers WHERE city = 'Mumbai'",
+    },
+    {
+        "name": "The Partial Fixer",
+        "task": "easy_fix_select",
+        "description": "Tests semantic grader when the LLM forgets the WHERE clause and a column",
+        "query": "SELECT customer_id, name FROM customers",
+    },
+    {
+        "name": "The Subquery Monster",
+        "task": "hard_subquery_optimize",
+        "description": "Tests efficiency penalty for massive N+1 subqueries",
+        "query": "SELECT c.customer_id, c.name, (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.customer_id) as order_count, (SELECT SUM(unit_price * quantity) FROM order_items oi JOIN orders o ON oi.order_id = o.order_id WHERE o.customer_id = c.customer_id) as total_spent FROM customers c WHERE (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.customer_id) > 2",
+    },
+    {
+        "name": "The CTE Master",
+        "task": "hard_subquery_optimize",
+        "description": "Tests optimal CTE usage for maximum reward on Hard task",
+        "query": "WITH customer_stats AS (SELECT o.customer_id, COUNT(o.order_id) as order_count, SUM(oi.unit_price * oi.quantity) as total_spent FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id) SELECT c.customer_id, c.name, cs.order_count, cs.total_spent FROM customers c JOIN customer_stats cs ON c.customer_id = cs.customer_id WHERE cs.order_count > 2",
     },
 ]
 
@@ -81,87 +108,86 @@ async def run_gauntlet():
     print(f"{color('=' * 70, 'cyan')}")
     print(f"{color('Testing environment robustness against edge cases', 'white')}")
     print(f"{color(f'Space: {SPACE_ID}', 'dim')}")
-    print(f"{color(f'Task: {TASK_NAME}', 'dim')}")
     print()
 
     env = SQLOptimizerEnv(f"wss://zeroij-sql-query-optimizer.hf.space")
     results: List[Dict[str, Any]] = []
 
-    try:
-        for i, scenario in enumerate(GAUNTLET, 1):
-            print(f"{color(f'⚔️  Test {i}: {scenario['name']}', 'yellow')}")
-            print(f"    {color(scenario['description'], 'white')}")
+    for i, scenario in enumerate(GAUNTLET, 1):
+        print(f"{color(f'⚔️  Test {i}: {scenario['name']}', 'yellow')}")
+        print(f"    {color(scenario['description'], 'white')}")
+        task_key = scenario["task"]
+        print(f"    {color(f'Task: {task_key}', 'dim')}")
 
-            try:
-                reset_result = await env.reset(task_id=TASK_NAME)
-                obs = reset_result.observation
+        try:
+            reset_result = await env.reset(task_id=scenario["task"])
+            obs = reset_result.observation
 
-                action = SQLAction(query=scenario["query"])
-                step_result = await env.step(action)
+            action = SQLAction(query=scenario["query"])
+            step_result = await env.step(action)
 
-                obs = step_result.observation
-                reward_val = (
-                    float(step_result.reward) if step_result.reward is not None else 0.0
-                )
-                done = step_result.done
+            obs = step_result.observation
+            reward_val = (
+                float(step_result.reward) if step_result.reward is not None else 0.0
+            )
+            done = step_result.done
 
-                correctness = obs.metadata.get("correctness", 0.0)
-                efficiency = obs.metadata.get("efficiency", 0.0)
-                is_valid_sql = obs.metadata.get("is_valid_sql", True)
-                error_msg = obs.error_message
+            correctness = obs.metadata.get("correctness", 0.0)
+            efficiency = obs.metadata.get("efficiency", 0.0)
+            is_valid_sql = obs.metadata.get("is_valid_sql", True)
+            error_msg = obs.error_message
 
-                results.append(
-                    {
-                        "name": scenario["name"],
-                        "query": scenario["query"],
-                        "reward": reward_val,
-                        "correctness": correctness,
-                        "efficiency": efficiency,
-                        "is_valid_sql": is_valid_sql,
-                        "error": error_msg,
-                        "done": done,
-                    }
-                )
+            results.append(
+                {
+                    "name": scenario["name"],
+                    "query": scenario["query"],
+                    "reward": reward_val,
+                    "correctness": correctness,
+                    "efficiency": efficiency,
+                    "is_valid_sql": is_valid_sql,
+                    "error": error_msg,
+                    "done": done,
+                }
+            )
 
-                score_color = (
-                    "green"
-                    if reward_val >= 0.9
-                    else "yellow"
-                    if reward_val >= 0.5
-                    else "red"
-                )
-                print(f"    {color('─' * 50, 'dim')}")
-                print(f"    Reward:   {color(f'{reward_val:.4f}', score_color)}")
-                print(
-                    f"    Correct:  {color(f'{correctness:.2f}', 'cyan')} | "
-                    f"{color(f'Efficiency: {efficiency:.2f}', 'cyan')}"
-                )
-                print(f"    Valid SQL: {color(str(is_valid_sql), 'cyan')}")
+            score_color = (
+                "green"
+                if reward_val >= 0.9
+                else "yellow"
+                if reward_val >= 0.5
+                else "red"
+            )
+            print(f"    {color('─' * 50, 'dim')}")
+            print(f"    Reward:   {color(f'{reward_val:.4f}', score_color)}")
+            print(
+                f"    Correct:  {color(f'{correctness:.2f}', 'cyan')} | "
+                f"{color(f'Efficiency: {efficiency:.2f}', 'cyan')}"
+            )
+            print(f"    Valid SQL: {color(str(is_valid_sql), 'cyan')}")
 
-                if error_msg:
-                    print(f"    {color(f'Error: {error_msg}', 'red')}")
-                if done:
-                    print(f"    {color('Episode terminated', 'magenta')}")
+            if error_msg:
+                print(f"    {color(f'Error: {error_msg}', 'red')}")
+            if done:
+                print(f"    {color('Episode terminated', 'magenta')}")
 
-            except Exception as e:
-                print(f"    {color(f'Exception: {str(e)}', 'red')}")
-                results.append(
-                    {
-                        "name": scenario["name"],
-                        "query": scenario["query"],
-                        "reward": -1.0,
-                        "correctness": 0.0,
-                        "efficiency": 0.0,
-                        "is_valid_sql": False,
-                        "error": str(e),
-                        "done": False,
-                    }
-                )
+        except Exception as e:
+            print(f"    {color(f'Exception: {str(e)}', 'red')}")
+            results.append(
+                {
+                    "name": scenario["name"],
+                    "query": scenario["query"],
+                    "reward": -1.0,
+                    "correctness": 0.0,
+                    "efficiency": 0.0,
+                    "is_valid_sql": False,
+                    "error": str(e),
+                    "done": False,
+                }
+            )
 
-            print()
+        print()
 
-    finally:
-        await env.close()
+    await env.close()
 
     print(box("📊 GAUNTLET RESULTS SUMMARY", ""))
     print()
