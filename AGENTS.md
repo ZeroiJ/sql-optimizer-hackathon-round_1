@@ -63,5 +63,5 @@ python scripts/evaluate_gauntlet.py
 ## NOTES
 - **3 tasks** with max_attempts: easy=5, medium=7, hard=10
 - **Reward formula** varies by task difficulty
-- **Semantic check**: executes both queries, penalizes -500 on mismatch
+- **Semantic check**: executes both queries, sets Correctness to 0.0 on mismatch
 - **Cost heuristics**: SCAN +100, SEARCH +10, TEMP B-TREE +50

@@ -10,7 +10,7 @@
 
 | Violation | Penalty | Effect |
 |-----------|---------|--------|
-| Semantic mismatch (wrong data) | **-500.0** | correctness = 0.0, episode continues |
+| Semantic mismatch (wrong data) | **0.0 correctness** | Correctness = 0.0, agent receives only minor syntax reward |
 | Destructive query (DROP/DELETE/TRUNCATE) | **-1.0** | episode ends immediately |
 | Invalid SQL syntax | **-0.1** | is_valid_sql = 0.0, retry allowed |
 

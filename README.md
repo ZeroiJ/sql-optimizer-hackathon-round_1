@@ -24,7 +24,7 @@ A Reinforcement Learning environment that trains AI agents to fix and optimize S
 
 This environment presents an AI agent with broken, incorrect, or inefficient SQL queries against a real SQLite database. The agent must submit a fixed/optimized version. The environment grades submissions using a **two-stage anti-hallucination engine**:
 
-1. **Semantic Equivalence Check** — executes both queries and compares results. If the data does not match exactly, the agent receives a **-500 penalty**.
+1. **Semantic Equivalence Check** — executes both queries and compares results. If the data does not match exactly, the Semantic Grader accurately sets Correctness to 0.0, leaving the agent with only a minor syntax reward (e.g., 0.24).
 2. **EXPLAIN QUERY PLAN Heuristic** — analyzes the SQLite execution tree, penalizing full table scans (`SCAN` = +100), temporary B-trees (`USE TEMP B-TREE` = +50), and correlated subqueries (`CORRELATED SCALAR SUBQUERY` = +150), while rewarding efficient index usage (`SEARCH` = +10, `COVERING INDEX` = -20).
 
 ---
@@ -53,7 +53,7 @@ Additional bonuses:
 Penalties:
 - **Invalid SQL**: -0.1
 - **Destructive query** (DROP/DELETE/TRUNCATE/ALTER): -1.0, episode ends
-- **Semantic mismatch**: -500.0
+- **Semantic mismatch**: Correctness = 0.0, agent receives only minor syntax reward
 
 Episode ends when score >= 0.95 or max attempts exceeded.
 

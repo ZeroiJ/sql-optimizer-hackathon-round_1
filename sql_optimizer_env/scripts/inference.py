@@ -91,7 +91,7 @@ async def main():
                 )
 
                 if done:
-                    if reward_val >= 1.0:
+                    if reward_val >= 0.95:
                         success = True
                     break
 
