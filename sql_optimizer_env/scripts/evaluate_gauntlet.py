@@ -70,9 +70,8 @@ GAUNTLET = [
     },
     {
         "name": "The Perfect Optimizer",
-        "description": "Optimal query with index for maximum score",
-        "query": "CREATE INDEX idx_status ON orders(status); SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed';",
-        "expected": "High correctness + high efficiency = max score",
+        "description": "Optimal query for maximum score",
+        "query": "SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed'"
     },
 ]
 
