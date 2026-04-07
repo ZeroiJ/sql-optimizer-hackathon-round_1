@@ -1,7 +1,7 @@
 """Inference script for validating the SQL Optimizer environment with LLM agents.
 
-Connects to the deployed environment, iterations through the tasks, sends broken queries 
-to a Hugging Face model via the router, parses the responses, and steps through the environment 
+Connects to the deployed environment, iterations through the tasks, sends broken queries
+to a Hugging Face model via the router, parses the responses, and steps through the environment
 to collect graded rewards.
 """
 
@@ -43,10 +43,10 @@ def main():
         sys.exit(1)
 
     model_name = os.environ.get("HF_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
-    
+
     # 1. Use the Hugging Face Router
     llm_client = InferenceClient(token=hf_token)
-    
+
     # Connect to the environment (local direct instantiation since it's the mandatory script logic)
     print(f"Connecting to local environment...")
     print(f"Using Hugging Face model: {model_name}")
@@ -55,7 +55,7 @@ def main():
 
     # 2. Iterate through the exactly 3 tasks
     tasks = ["easy_fix_select", "medium_slow_join", "hard_subquery_optimize"]
-    
+
     total_reward = 0.0
 
     print(f"\n{'=' * 60}")
@@ -64,7 +64,7 @@ def main():
 
     for task_id in tasks:
         print(f"\nTesting Task: {task_id}")
-        
+
         obs: SQLObservation = env.reset(task_id=task_id)
 
         print(f"Broken Query: {obs.broken_query}")
@@ -72,14 +72,14 @@ def main():
 
         while not obs.done:
             # 4. Mandatory System Prompt
-            system_prompt = "You are a Senior DBA. Fix the provided broken SQL query. Return ONLY a JSON object with the \"query\" key."
+            system_prompt = 'You are a Senior DBA. Fix the provided broken SQL query. Return ONLY a JSON object with the "query" key.'
             user_prompt = f"Schema:\n{obs.schema_description}\n\nBroken Query:\n{obs.broken_query}"
 
             try:
                 response = llm_client.chat_completion(
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "user", "content": user_prompt},
                     ],
                     model=model_name,
                     max_tokens=500,
