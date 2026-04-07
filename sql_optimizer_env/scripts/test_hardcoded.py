@@ -1,3 +1,11 @@
+"""Hardcoded test script for validating the SQL Optimizer environment.
+
+This script runs a set of predefined SQL queries against the three difficulty
+levels (easy/medium/hard) to verify that the environment correctly grades
+submissions and calculates rewards. It serves as a sanity check before
+running the LLM inference script.
+"""
+
 import sys
 from pathlib import Path
 
@@ -28,6 +36,7 @@ TASKS = [
 
 
 def main():
+    """Run all hardcoded test cases against the SQL Optimizer environment."""
     env = SQLOptimizerEnv()
 
     for task in TASKS:

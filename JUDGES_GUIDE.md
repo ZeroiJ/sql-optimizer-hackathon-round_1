@@ -4,7 +4,15 @@
 
 ---
 
-## Section 1: The "SELECT 1" Exploit — Neutralized
+## Section 1: The Anti-Hallucination Grading Philosophy
+
+**Penalty Tripwires:**
+
+| Violation | Penalty | Effect |
+|-----------|---------|--------|
+| Semantic mismatch (wrong data) | **-500.0** | correctness = 0.0, episode continues |
+| Destructive query (DROP/DELETE/TRUNCATE) | **-1.0** | episode ends immediately |
+| Invalid SQL syntax | **-0.1** | is_valid_sql = 0.0, retry allowed |
 
 **The attack:** An agent submits `SELECT 1;` — a query that always executes successfully and returns a trivial result. A naive grader that only checks `is_valid_sql` would award a positive score.
 

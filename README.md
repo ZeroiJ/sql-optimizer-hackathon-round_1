@@ -14,6 +14,8 @@ tags:
 
 **Meta PyTorch OpenEnv Hackathon**
 
+> **📜 For Judges:** See [JUDGES_GUIDE.md](./JUDGES_GUIDE.md) for detailed grading mechanics, anti-hallucination strategies, and cloud verification steps.
+
 A Reinforcement Learning environment that trains AI agents to fix and optimize SQL queries — simulating a real-world Database Administration (DBA) task on a SQLite e-commerce database.
 
 ---
