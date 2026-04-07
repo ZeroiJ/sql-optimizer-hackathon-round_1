@@ -1,4 +1,4 @@
-# Judges Guide — SQL Query Optimizer Environment
+# Judges Guide: The Anti-Hallucination SQL Grader
 
 > For Meta & Scaler engineers evaluating this submission.
 
