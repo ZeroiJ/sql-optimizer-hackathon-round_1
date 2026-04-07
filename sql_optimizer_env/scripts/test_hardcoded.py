@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sql_optimizer_env.server.sql_optimizer_environment import SQLOptimizerEnvironment
+from sql_optimizer_env.env.sql_optimizer import SQLOptimizerEnv
 from sql_optimizer_env.models import SQLAction
 
 
@@ -20,11 +20,15 @@ TASKS = [
         "task_id": "hard_subquery_optimize",
         "query": "WITH customer_stats AS (SELECT o.customer_id, COUNT(o.order_id) as order_count, SUM(oi.unit_price * oi.quantity) as total_spent FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.customer_id) SELECT c.customer_id, c.name, cs.order_count, cs.total_spent FROM customers c JOIN customer_stats cs ON c.customer_id = cs.customer_id WHERE cs.order_count > 2",
     },
+    {
+        "task_id": "easy_fix_select",
+        "query": "SELECT 1;",
+    },
 ]
 
 
 def main():
-    env = SQLOptimizerEnvironment()
+    env = SQLOptimizerEnv()
 
     for task in TASKS:
         task_id = task["task_id"]

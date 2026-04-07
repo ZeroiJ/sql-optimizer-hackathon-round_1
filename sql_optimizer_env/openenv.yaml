@@ -42,4 +42,4 @@ tasks:
     difficulty: hard
     max_attempts: 10
 
-entry_point: server.sql_optimizer_environment:SQLOptimizerEnvironment
+entry_point: env.sql_optimizer:SQLOptimizerEnv
