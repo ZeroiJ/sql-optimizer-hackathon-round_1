@@ -245,7 +245,7 @@ class SQLOptimizerEnvironment(Environment):
         """Create fresh in-memory SQLite database with schema and seed data."""
         if self._conn:
             self._conn.close()
-        self._conn = sqlite3.connect(":memory:")
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.execute("PRAGMA foreign_keys = ON")
         for ddl in TABLES.values():
             self._conn.execute(ddl)
