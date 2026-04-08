@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from openai import OpenAI
 
-from sql_optimizer_env.client import SQLOptimizerEnv
+from client import SQLOptimizerEnv
 from sql_optimizer_env.models import SQLAction
 
 
