@@ -403,7 +403,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=True,
-                reward=-0.1,
+                reward=0.0,
                 metadata={"error": "not_initialized"},
             )
 
@@ -425,7 +425,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=True,
-                reward=-1.0,
+                reward=0.0,
                 metadata={"destructive": True},
             )
 
@@ -464,7 +464,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=done,
-                reward=-0.1,
+                reward=0.0,
                 metadata={"is_valid_sql": False},
             )
 
