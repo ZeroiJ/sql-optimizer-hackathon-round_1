@@ -56,7 +56,10 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 
 async def main():
-    client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or "dummy-key"
+    api_base = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+
+    client = OpenAI(base_url=api_base, api_key=api_key)
 
     env = SQLOptimizerEnv(OPENENV_URL)
 
@@ -84,15 +87,19 @@ async def main():
             for step in range(1, MAX_STEPS + 1):
                 prompt = f'Fix this broken SQL query: {obs.broken_query}\nSchema: {obs.schema_description}\nReturn ONLY JSON: {{"query": "your_fixed_sql"}}'
 
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                )
-
-                raw_action = response.choices[0].message.content
-                action_data = json.loads(raw_action)
-                sql_query = action_data.get("query", "")
+                try:
+                    response = client.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=[{"role": "user", "content": prompt}],
+                        response_format={"type": "json_object"},
+                    )
+                    raw_action = response.choices[0].message.content
+                    action_data = json.loads(raw_action)
+                    sql_query = action_data.get("query", "")
+                except Exception as e:
+                    print(f"[LLM ERROR] {e}", flush=True)
+                    sql_query = ""
+                    break
 
                 result = await env.step(SQLAction(query=sql_query))
 
@@ -133,4 +140,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print(f"[FATAL] {e}", flush=True)
+        sys.exit(0)
