@@ -16,7 +16,7 @@ from sql_optimizer_env.models import SQLAction
 HF_TOKEN = os.getenv("HF_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
-SPACE_ID = os.getenv("SPACE_ID", "ZeroiJ/sql-query-optimizer")
+OPENENV_URL = os.getenv("OPENENV_URL", "http://localhost:7860")
 
 TASK_NAMES = ["easy_fix_select", "medium_slow_join", "hard_subquery_optimize"]
 MAX_STEPS = 5
@@ -48,7 +48,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-    env = SQLOptimizerEnv(SPACE_ID)
+    env = SQLOptimizerEnv(OPENENV_URL)
 
     total_rewards = []
     total_steps = 0
