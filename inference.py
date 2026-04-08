@@ -1,7 +1,10 @@
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "sql_optimizer_env")
+)
 
 import asyncio
 import json
@@ -9,12 +12,19 @@ from typing import List, Optional
 
 from openai import OpenAI
 
-from client import SQLOptimizerEnv
-from sql_optimizer_env.models import SQLAction
+try:
+    from sql_optimizer_env.client import SQLOptimizerEnv
+except ImportError:
+    from client import SQLOptimizerEnv
+
+try:
+    from sql_optimizer_env.models import SQLAction
+except ImportError:
+    from models import SQLAction
 
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 OPENENV_URL = os.getenv("OPENENV_URL", "http://localhost:7860")
 
@@ -46,7 +56,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 
 async def main():
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
 
     env = SQLOptimizerEnv(OPENENV_URL)
 

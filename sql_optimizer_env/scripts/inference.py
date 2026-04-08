@@ -6,10 +6,14 @@ from typing import List, Optional
 from openai import OpenAI
 
 from sql_optimizer_env.client import SQLOptimizerEnv
-from sql_optimizer_env.models import SQLAction
+
+try:
+    from sql_optimizer_env.models import SQLAction
+except ImportError:
+    from models import SQLAction
 
 
-HF_TOKEN = os.getenv("HF_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 SPACE_ID = os.getenv("SPACE_ID", "ZeroiJ/sql-query-optimizer")
@@ -42,7 +46,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 
 async def main():
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    client = OpenAI(base_url=API_BASE_URL, api_key=OPENAI_API_KEY)
 
     env = SQLOptimizerEnv(SPACE_ID)
 
