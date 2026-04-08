@@ -369,7 +369,7 @@ class SQLOptimizerEnvironment(Environment):
             attempts=0,
             max_attempts=self._max_attempts,
             done=False,
-            reward=0.0,
+            reward=0.01,
             metadata={"status": "ready"},
         )
 
@@ -403,7 +403,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=True,
-                reward=0.0,
+                reward=0.01,
                 metadata={"error": "not_initialized"},
             )
 
@@ -425,7 +425,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=True,
-                reward=0.0,
+                reward=0.01,
                 metadata={"destructive": True},
             )
 
@@ -464,7 +464,7 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=done,
-                reward=0.0,
+                reward=0.01,
                 metadata={"is_valid_sql": False},
             )
 
@@ -502,6 +502,8 @@ class SQLOptimizerEnvironment(Environment):
         attempt_ratio = self._attempts / self._max_attempts
         speed_bonus = 0.1 * (1 - attempt_ratio) if correctness == 1.0 else 0
         final_value = min(1.0, base_score + improvement_bonus + speed_bonus)
+        # Clamp to strictly (0, 1) — validator requires 0 < score < 1
+        final_value = max(0.01, min(0.99, final_value))
         self._current_score = final_value
         self._previous_score = base_score
 
