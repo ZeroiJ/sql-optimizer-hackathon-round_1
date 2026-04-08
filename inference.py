@@ -62,7 +62,14 @@ async def main():
             steps_taken = 0
             success = False
 
-            obs = await env.reset(task_id=task_name)
+            reset_result = await env.reset(task_id=task_name)
+            print("DEBUG StepResult:", dir(reset_result), flush=True)
+            print(
+                "DEBUG Observation:",
+                getattr(reset_result, "observation", None),
+                flush=True,
+            )
+            obs = reset_result.observation
 
             for step in range(1, MAX_STEPS + 1):
                 prompt = f'Fix this broken SQL query: {obs.broken_query}\nSchema: {obs.schema_description}\nReturn ONLY JSON: {{"query": "your_fixed_sql"}}'
