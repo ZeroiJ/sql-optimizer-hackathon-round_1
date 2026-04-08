@@ -19,7 +19,8 @@ app = create_app(
 @app.get("/")
 @app.get("/web")
 @app.get("/web/reset")
-def health_check():
+@app.post("/web/reset")
+def health_check(payload=None):
     return {
         "status": "ok",
         "message": "SQL Optimizer Environment is running and ready.",
