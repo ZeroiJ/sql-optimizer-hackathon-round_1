@@ -3,14 +3,22 @@ from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
 try:
-    from .models import SQLAction, SQLObservation
+    from .models import AgentAction, CreateIndexAction, RewriteQueryAction, SQLObservation
 except ImportError:
-    from models import SQLAction, SQLObservation
+    from models import AgentAction, CreateIndexAction, RewriteQueryAction, SQLObservation
 
 
-class SQLOptimizerEnv(EnvClient[SQLAction, SQLObservation, State]):
-    def _step_payload(self, action: SQLAction) -> dict:
-        return {"query": action.query}
+class SQLOptimizerEnv(EnvClient[AgentAction, SQLObservation, State]):
+    def _step_payload(self, action: AgentAction) -> dict:
+        if isinstance(action, RewriteQueryAction):
+            return {"action_type": "rewrite_query", "new_sql": action.new_sql}
+        if isinstance(action, CreateIndexAction):
+            return {
+                "action_type": "create_index",
+                "table_name": action.table_name,
+                "column_name": action.column_name,
+            }
+        raise ValueError("Unsupported action type for payload serialization.")
 
     def _parse_result(self, payload: dict) -> StepResult[SQLObservation]:
         obs_data = payload.get("observation", {})

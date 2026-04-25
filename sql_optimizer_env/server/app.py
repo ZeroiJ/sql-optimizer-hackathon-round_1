@@ -4,15 +4,15 @@ except ImportError:
     from openenv.core.env_server.http_server import create_app
 
 try:
-    from ..models import SQLAction, SQLObservation
+    from ..models import AgentAction, SQLObservation
     from .sql_optimizer_environment import SQLOptimizerEnvironment
 except ImportError:
-    from models import SQLAction, SQLObservation
+    from models import AgentAction, SQLObservation
     from server.sql_optimizer_environment import SQLOptimizerEnvironment
 
 
 app = create_app(
-    SQLOptimizerEnvironment, SQLAction, SQLObservation, env_name="sql_optimizer_env"
+    SQLOptimizerEnvironment, AgentAction, SQLObservation, env_name="sql_optimizer_env"
 )
 
 

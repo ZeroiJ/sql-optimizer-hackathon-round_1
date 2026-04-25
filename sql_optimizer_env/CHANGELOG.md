@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-25
+
+### Added
+- **Prompt Formatting Layer** (`agent/prompt_formatter.py`)
+  - Added `TaskAgentFormatter.format_observation(obs)` to convert `SQLObservation`
+    into strict chat-format prompts (`system` + `user`) for Qwen-style generation.
+  - User prompt now includes broken query, baseline execution time, execution plan
+    JSON, schema drift alerts, and explicit JSON action schema constraints.
+
+- **Training Pipeline Scaffolding** (`train/`)
+  - Added `train/model_loader.py` with Unsloth loader:
+    - base model: `unsloth/Qwen2.5-Coder-7B-Instruct`
+    - 4-bit loading + fast inference
+    - LoRA adapters on standard attention/MLP projection modules
+  - Added `train/grpo_trainer.py`:
+    - `openenv_reward_func(...)` validates generated JSON against `AgentAction`
+      and executes actions against `SQLOptimizerEnvironment`
+    - invalid/parse-failed generations receive flat `-2.0` reward
+    - valid generations are scored by summed reward dimensions:
+      `correctness + efficiency + style + anticheat`
+    - `main()` wires Unsloth model loading, dummy HF dataset, `GRPOConfig`,
+      `GRPOTrainer`, and `trainer.train()`
+
+### Dependencies
+- Added RL/training dependencies to `pyproject.toml`:
+  - `datasets>=2.0.0`
+  - `trl>=0.9.0`
+  - `unsloth>=2024.1.0`
+
 ## [2.1.0] - 2026-04-25
 
 ### Added

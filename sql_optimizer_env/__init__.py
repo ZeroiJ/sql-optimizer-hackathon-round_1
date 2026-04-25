@@ -1,4 +1,4 @@
-from .models import SQLAction, SQLObservation
+from .models import AgentAction, SQLObservation
 from .client import SQLOptimizerEnv
 
-__all__ = ["SQLOptimizerEnv", "SQLAction", "SQLObservation"]
+__all__ = ["SQLOptimizerEnv", "AgentAction", "SQLObservation"]
