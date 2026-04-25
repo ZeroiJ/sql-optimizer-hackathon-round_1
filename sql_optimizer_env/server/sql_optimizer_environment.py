@@ -1,16 +1,21 @@
 """SQL Query Optimizer Environment for OpenEnv — Meta PyTorch Hackathon.
 
 An RL environment where an LLM agent must fix broken SQL queries and optimize
-slow queries against a SQLite e-commerce database. Supports three difficulty
+slow queries against a PostgreSQL e-commerce database. Supports three difficulty
 levels (easy/medium/hard) with programmatic graders and multi-step episodes.
 """
 
+import json
+import os
 import random
 import re
-import sqlite3
 from typing import Any, Optional, List, Tuple
 from uuid import uuid4
 
+import psycopg2
+import psycopg2.extras
+from pydantic import ValidationError
+
 try:
     from openenv.core.env_server.interfaces import Environment
     from openenv.core.env_server.types import State
@@ -19,50 +24,67 @@ except ImportError:
     from openenv.core.env_server.types import State
 
 try:
-    from ..models import SQLAction, SQLObservation, SQLReward
+    from ..models import (
+        AgentAction,
+        CreateIndexAction,
+        RewriteQueryAction,
+        SQLObservation,
+        SQLReward,
+    )
+    from ..env.workload_generator import WorkloadGenerator
+    from ..env.schema_drift import SchemaDrifter
+    from ..env.rewards import calculate_all_rewards
 except ImportError:
-    from models import SQLAction, SQLObservation, SQLReward
+    from models import (
+        AgentAction,
+        CreateIndexAction,
+        RewriteQueryAction,
+        SQLObservation,
+        SQLReward,
+    )
+    from env.workload_generator import WorkloadGenerator
+    from env.schema_drift import SchemaDrifter
+    from env.rewards import calculate_all_rewards
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://admin:admin@localhost:5432/dbre_env"
+)
 
 TABLES = {
-    "customers": """CREATE TABLE customers (
-        customer_id INTEGER PRIMARY KEY,
+    "customers": """CREATE TABLE IF NOT EXISTS customers (
+        customer_id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         city TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT NOW()
     )""",
-    "products": """CREATE TABLE products (
-        product_id INTEGER PRIMARY KEY,
+    "products": """CREATE TABLE IF NOT EXISTS products (
+        product_id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         category TEXT NOT NULL,
-        price REAL NOT NULL,
+        price NUMERIC(10,2) NOT NULL,
         stock INTEGER DEFAULT 0
     )""",
-    "orders": """CREATE TABLE orders (
-        order_id INTEGER PRIMARY KEY,
-        customer_id INTEGER NOT NULL,
-        order_date TEXT DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'pending',
-        FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    "orders": """CREATE TABLE IF NOT EXISTS orders (
+        order_id SERIAL PRIMARY KEY,
+        customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+        order_date TIMESTAMP DEFAULT NOW(),
+        status TEXT DEFAULT 'pending'
     )""",
-    "order_items": """CREATE TABLE order_items (
-        item_id INTEGER PRIMARY KEY,
-        order_id INTEGER NOT NULL,
-        product_id INTEGER NOT NULL,
+    "order_items": """CREATE TABLE IF NOT EXISTS order_items (
+        item_id SERIAL PRIMARY KEY,
+        order_id INTEGER NOT NULL REFERENCES orders(order_id),
+        product_id INTEGER NOT NULL REFERENCES products(product_id),
         quantity INTEGER NOT NULL,
-        unit_price REAL NOT NULL,
-        FOREIGN KEY (order_id) REFERENCES orders(order_id),
-        FOREIGN KEY (product_id) REFERENCES products(product_id)
+        unit_price NUMERIC(10,2) NOT NULL
     )""",
-    "reviews": """CREATE TABLE reviews (
-        review_id INTEGER PRIMARY KEY,
-        customer_id INTEGER NOT NULL,
-        product_id INTEGER NOT NULL,
+    "reviews": """CREATE TABLE IF NOT EXISTS reviews (
+        review_id SERIAL PRIMARY KEY,
+        customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+        product_id INTEGER NOT NULL REFERENCES products(product_id),
         rating INTEGER CHECK(rating BETWEEN 1 AND 5),
         review_text TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
-        FOREIGN KEY (product_id) REFERENCES products(product_id)
+        created_at TIMESTAMP DEFAULT NOW()
     )""",
 }
 
@@ -99,125 +121,115 @@ TASKS = {
 DESTRUCTIVE_RE = re.compile(
     r"\b(DROP|DELETE|TRUNCATE|ALTER|ATTACH|DETACH|REINDEX|VACUUM)\b", re.IGNORECASE
 )
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _calculate_query_cost(conn: sqlite3.Connection, query: str) -> float:
-    """Estimate query execution cost via EXPLAIN QUERY PLAN heuristics.
+def _explain_analyze_json(conn, query: str) -> dict:
+    """Run EXPLAIN (ANALYZE, FORMAT JSON) and return parsed plan + execution time.
 
-    Args:
-        conn: Active SQLite connection.
-        query: SQL query to analyze.
-
-    Returns:
-        Numeric cost score. Lower is better. Returns 10000.0 on parse error.
+    Returns dict with keys:
+        execution_time_ms: float — total execution time in milliseconds
+        plan: dict — the root plan node from PostgreSQL's EXPLAIN output
+        total_cost: float — the planner's estimated total cost
+    Falls back to sentinel values on error.
     """
     try:
-        cursor = conn.cursor()
-        cursor.execute(f"EXPLAIN QUERY PLAN {query}")
-        rows = cursor.fetchall()
-    except sqlite3.Error:
-        return 10000.0
-    if not rows:
-        return 0.0
-    cost = 0.0
-    for row in rows:
-        detail = row[-1].upper() if row[-1] else ""
-        if "SCAN " in detail:
-            cost += 100.0
-        if "SEARCH " in detail:
-            cost += 10.0
-        if "USE TEMP B-TREE" in detail:
-            cost += 50.0
-        if "AUTOMATIC INDEX" in detail:
-            cost += 75.0
-        if "CORRELATED SCALAR SUBQUERY" in detail:
-            cost += 150.0
-        if "COVERING INDEX" in detail:
-            cost -= 20.0
-    return cost
+        cur = conn.cursor()
+        cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}")
+        rows = cur.fetchall()
+        conn.commit()
+    except psycopg2.Error:
+        conn.rollback()
+        return {"execution_time_ms": 99999.0, "plan": {}, "total_cost": 99999.0}
+
+    if not rows or not rows[0] or not rows[0][0]:
+        return {"execution_time_ms": 99999.0, "plan": {}, "total_cost": 99999.0}
+
+    explain_output = rows[0][0]
+    if isinstance(explain_output, str):
+        explain_output = json.loads(explain_output)
+
+    root = explain_output[0] if isinstance(explain_output, list) else explain_output
+    plan = root.get("Plan", {})
+    execution_time = root.get("Execution Time", 99999.0)
+    total_cost = plan.get("Total Cost", 99999.0)
+
+    return {
+        "execution_time_ms": execution_time,
+        "plan": plan,
+        "total_cost": total_cost,
+    }
 
 
-def _seed_data(conn: sqlite3.Connection) -> None:
-    """Populate all five tables with deterministic mock e-commerce data.
+def _seed_data(conn) -> None:
+    """Bulk-generate e-commerce data using PostgreSQL generate_series() and random().
 
-    Uses random.seed(42) for reproducibility. Inserts ~100 customers, ~50 products,
-    ~300 orders, ~600 order items, and ~200 reviews.
-
-    Args:
-        conn: Active SQLite connection with schema already created.
+    Produces 10k customers, 5k products, 100k orders, 500k order_items, 50k reviews.
+    All generated server-side in raw SQL — no Python loops.
     """
-    random.seed(42)
     cur = conn.cursor()
-    cities = [
-        "Mumbai",
-        "Delhi",
-        "Bangalore",
-        "Chennai",
-        "Kolkata",
-        "Hyderabad",
-        "Pune",
-        "Ahmedabad",
-    ]
-    categories = ["Electronics", "Clothing", "Books", "Home", "Sports"]
-    statuses = ["pending", "completed", "shipped", "cancelled"]
-    review_texts = [
-        "Great product!",
-        "Not bad",
-        "Could be better",
-        "Excellent",
-        "Terrible quality",
-    ]
-    for i in range(100):
-        cur.execute(
-            "INSERT INTO customers (name, email, city) VALUES (?, ?, ?)",
-            (f"Customer_{i}", f"cust{i}@example.com", random.choice(cities)),
-        )
-    for i in range(50):
-        cur.execute(
-            "INSERT INTO products (name, category, price, stock) VALUES (?, ?, ?, ?)",
-            (
-                f"Product_{i}",
-                random.choice(categories),
-                round(random.uniform(5, 500), 2),
-                random.randint(0, 200),
-            ),
-        )
-    for i in range(300):
-        cur.execute(
-            "INSERT INTO orders (customer_id, order_date, status) VALUES (?, ?, ?)",
-            (
-                random.randint(1, 100),
-                f"2024-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}",
-                random.choice(statuses),
-            ),
-        )
-    for i in range(600):
-        cur.execute(
-            "INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)",
-            (
-                random.randint(1, 300),
-                random.randint(1, 50),
-                random.randint(1, 10),
-                round(random.uniform(5, 200), 2),
-            ),
-        )
-    for i in range(200):
-        cur.execute(
-            "INSERT INTO reviews (customer_id, product_id, rating, review_text) VALUES (?, ?, ?, ?)",
-            (
-                random.randint(1, 100),
-                random.randint(1, 50),
-                random.randint(1, 5),
-                random.choice(review_texts),
-            ),
-        )
+
+    cur.execute("""
+        INSERT INTO customers (name, email, city)
+        SELECT
+            'Customer_' || gs,
+            'cust' || gs || '@example.com',
+            (ARRAY['Mumbai','Delhi','Bangalore','Chennai',
+                   'Kolkata','Hyderabad','Pune','Ahmedabad'])
+                [1 + floor(random() * 8)::int]
+        FROM generate_series(1, 10000) AS gs
+    """)
+
+    cur.execute("""
+        INSERT INTO products (name, category, price, stock)
+        SELECT
+            'Product_' || gs,
+            (ARRAY['Electronics','Clothing','Books','Home','Sports'])
+                [1 + floor(random() * 5)::int],
+            round((5 + random() * 495)::numeric, 2),
+            floor(random() * 201)::int
+        FROM generate_series(1, 5000) AS gs
+    """)
+
+    cur.execute("""
+        INSERT INTO orders (customer_id, order_date, status)
+        SELECT
+            1 + floor(random() * 10000)::int,
+            DATE '2024-01-01' + (floor(random() * 365)::int || ' days')::interval,
+            (ARRAY['pending','completed','shipped','cancelled'])
+                [1 + floor(random() * 4)::int]
+        FROM generate_series(1, 100000) AS gs
+    """)
+
+    cur.execute("""
+        INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+        SELECT
+            1 + floor(random() * 100000)::int,
+            1 + floor(random() * 5000)::int,
+            1 + floor(random() * 10)::int,
+            round((5 + random() * 195)::numeric, 2)
+        FROM generate_series(1, 500000) AS gs
+    """)
+
+    cur.execute("""
+        INSERT INTO reviews (customer_id, product_id, rating, review_text)
+        SELECT
+            1 + floor(random() * 10000)::int,
+            1 + floor(random() * 5000)::int,
+            1 + floor(random() * 5)::int,
+            (ARRAY['Great product!','Not bad','Could be better',
+                   'Excellent','Terrible quality'])
+                [1 + floor(random() * 5)::int]
+        FROM generate_series(1, 50000) AS gs
+    """)
+
     conn.commit()
 
 
 class SQLOptimizerEnvironment(Environment):
     """OpenEnv environment for SQL query fixing and optimization.
 
-    Manages a SQLite e-commerce database with three graded tasks:
+    Manages a PostgreSQL e-commerce database with three graded tasks:
     - easy_fix_select: Correct wrong column names and missing conditions
     - medium_slow_join: Replace cartesian products with proper JOINs
     - hard_subquery_optimize: Rewrite nested subqueries using CTEs/window functions
@@ -230,10 +242,9 @@ class SQLOptimizerEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS = True
 
     def __init__(self):
-        """Initialize environment state with empty session variables."""
         super().__init__()
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn = None
         self._current_task_id: Optional[str] = None
         self._attempts: int = 0
         self._max_attempts: int = 5
@@ -242,85 +253,58 @@ class SQLOptimizerEnvironment(Environment):
         self._created_indices: List[str] = []
 
     def _setup_database(self) -> None:
-        """Create fresh in-memory SQLite database with schema and seed data."""
         if self._conn:
-            self._conn.close()
-        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        for ddl in TABLES.values():
-            self._conn.execute(ddl)
-        _seed_data(self._conn)
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._conn = psycopg2.connect(DATABASE_URL)
+        self._conn.autocommit = False
+        cur = self._conn.cursor()
+        cur.execute("DROP SCHEMA public CASCADE")
+        cur.execute("CREATE SCHEMA public")
         self._conn.commit()
+        for ddl in TABLES.values():
+            cur.execute(ddl)
+        self._conn.commit()
+        _seed_data(self._conn)
 
     def _drop_created_indices(self) -> None:
-        """Drop all indices created during the current step to maintain statelessness."""
         if not self._conn:
             return
         cur = self._conn.cursor()
         for idx_name in self._created_indices:
             try:
                 cur.execute(f"DROP INDEX IF EXISTS {idx_name}")
-            except sqlite3.Error:
-                pass
+            except psycopg2.Error:
+                self._conn.rollback()
         self._conn.commit()
         self._created_indices = []
 
     def _verify_semantic_equivalence(
-        self, cursor: sqlite3.Cursor, expected_query: str, submitted_query: str
+        self, cursor, expected_query: str, submitted_query: str
     ) -> Tuple[bool, Any, Any]:
-        """Compare result sets of expected and submitted queries for correctness grading.
-
-        Args:
-            cursor: SQLite cursor for executing queries.
-            expected_query: Reference query producing the correct result set.
-            submitted_query: Agent's submitted query to validate.
-
-        Returns:
-            Tuple of (is_match, expected_rows, submitted_rows).
-        """
         try:
             cursor.execute(expected_query)
             expected_rows = cursor.fetchall()
-        except sqlite3.Error:
+        except psycopg2.Error:
+            self._conn.rollback()
             return False, None, None
         try:
             cursor.execute(submitted_query)
             submitted_rows = cursor.fetchall()
-        except sqlite3.Error:
+        except psycopg2.Error:
+            self._conn.rollback()
             return False, expected_rows, None
         return expected_rows == submitted_rows, expected_rows, submitted_rows
 
     def _get_task(self, task_id: str) -> dict:
-        """Return task configuration dict for the given task_id.
-
-        Args:
-            task_id: One of the keys in TASKS (easy_fix_select, medium_slow_join, hard_subquery_optimize).
-
-        Returns:
-            Dict with max_attempts, broken_query, expected_query, and score_formula.
-        """
         return TASKS[task_id]
 
     def _is_destructive(self, query: str) -> bool:
-        """Check if query contains destructive SQL keywords.
-
-        Args:
-            query: Raw SQL string to scan.
-
-        Returns:
-            True if query matches DROP, DELETE, TRUNCATE, ALTER, ATTACH, DETACH, REINDEX, or VACUUM.
-        """
         return bool(DESTRUCTIVE_RE.search(query))
 
     def _has_cte_or_window(self, query: str) -> bool:
-        """Detect whether query uses WITH (CTE) or window function syntax.
-
-        Args:
-            query: Raw SQL string to analyze.
-
-        Returns:
-            True if query contains WITH clause or OVER() window function.
-        """
         upper = query.upper()
         return (
             "WITH " in upper or "OVER(" in upper.replace(" ", "") or "OVER (" in upper
@@ -331,29 +315,31 @@ class SQLOptimizerEnvironment(Environment):
         task_id: Optional[str] = None,
         seed: Optional[int] = None,
         episode_id: Optional[str] = None,
+        use_workload_generator: bool = False,
         **kwargs: Any,
     ) -> SQLObservation:
-        """Reset the environment to a fresh database and return the initial observation.
-
-        Creates a new in-memory SQLite database, seeds it with deterministic data,
-        and selects a task (random if task_id is None). Resets attempt counters
-        and drops any lingering indices.
-
-        Args:
-            task_id: Specific task to load. Random if None.
-            seed: Random seed for reproducibility.
-            episode_id: Custom episode identifier.
-
-        Returns:
-            SQLObservation with task context, broken query, and initial state.
-        """
         if seed is not None:
             random.seed(seed)
         self._drop_created_indices()
         self._setup_database()
-        if task_id is None:
-            task_id = random.choice(list(TASKS.keys()))
-        task = self._get_task(task_id)
+        schema_diff: List[str] = []
+
+        # Inject controlled schema chaos in 20% of episodes.
+        if random.random() < 0.2:
+            try:
+                drifter = SchemaDrifter(seed=seed)
+                drift_action = drifter.trigger_random_drift()
+                schema_diff.append(drift_action)
+            except Exception as exc:
+                schema_diff.append(f"Schema drift failed: {exc}")
+
+        if use_workload_generator or task_id is None:
+            generator = WorkloadGenerator(seed=seed)
+            task = generator.generate_slow_query()
+            task_id = task["task_id"]
+        else:
+            task = self._get_task(task_id)
+
         self._current_task_id = task_id
         self._attempts = 0
         self._max_attempts = task["max_attempts"]
@@ -370,26 +356,13 @@ class SQLOptimizerEnvironment(Environment):
             max_attempts=self._max_attempts,
             done=False,
             reward=0.01,
-            metadata={"status": "ready"},
+            schema_diff=schema_diff,
+            metadata={"status": "ready", "schema_diff_applied": bool(schema_diff)},
         )
 
     def step(
-        self, action: SQLAction, timeout_s: Optional[float] = None, **kwargs: Any
+        self, action: AgentAction, timeout_s: Optional[float] = None, **kwargs: Any
     ) -> SQLObservation:
-        """Execute the agent's query and return graded observation with reward.
-
-        Validates the submitted query (destructive check, syntax check), executes
-        it against the database, compares results against the expected query for
-        semantic equivalence, calculates efficiency via EXPLAIN QUERY PLAN cost
-        heuristics, and computes a composite score with improvement/speed bonuses.
-
-        Args:
-            action: Agent's SQLAction containing the submitted query.
-            timeout_s: Optional timeout (not enforced in sync implementation).
-
-        Returns:
-            SQLObservation with updated score, reward, attempt count, and done flag.
-        """
         self._state.step_count += 1
         self._attempts += 1
 
@@ -408,14 +381,77 @@ class SQLOptimizerEnvironment(Environment):
             )
 
         task = self._get_task(self._current_task_id)
-        # Defensive: handle both SQLAction and raw dict (deserialization may vary by deployment)
-        if isinstance(action, dict):
-            submitted_query = action.get("query", "").strip()
+        schema_diff: List[str] = []
+        parsed_action: AgentAction
+        try:
+            if isinstance(action, RewriteQueryAction | CreateIndexAction):
+                parsed_action = action
+            elif isinstance(action, dict):
+                action_type = action.get("action_type")
+                if action_type == "rewrite_query":
+                    parsed_action = RewriteQueryAction(**action)
+                elif action_type == "create_index":
+                    parsed_action = CreateIndexAction(**action)
+                else:
+                    raise ValueError(
+                        "Invalid action_type. Expected 'rewrite_query' or 'create_index'."
+                    )
+            else:
+                parsed_action = RewriteQueryAction(**action.model_dump())
+        except (ValidationError, ValueError, AttributeError) as exc:
+            return SQLObservation(
+                task_id=self._current_task_id,
+                schema_description=SCHEMA_DESCRIPTION,
+                broken_query=task["broken_query"],
+                error_message=f"Invalid action payload: {exc}",
+                current_score=self._current_score,
+                attempts=self._attempts,
+                max_attempts=self._max_attempts,
+                done=False,
+                reward=-1.0,
+                schema_diff=schema_diff,
+                metadata={"error": "invalid_action"},
+            )
+
+        statements: List[str]
+        evaluation_query: str
+        action_payload: dict[str, str]
+        if isinstance(parsed_action, RewriteQueryAction):
+            submitted_query = parsed_action.new_sql.strip()
+            statements = [s.strip() for s in submitted_query.split(";") if s.strip()]
+            evaluation_query = submitted_query
+            action_payload = {"query": submitted_query}
         else:
-            submitted_query = action.query.strip()
+            table_name = parsed_action.table_name.strip()
+            column_name = parsed_action.column_name.strip()
+            if not IDENTIFIER_RE.match(table_name) or not IDENTIFIER_RE.match(column_name):
+                return SQLObservation(
+                    task_id=self._current_task_id,
+                    schema_description=SCHEMA_DESCRIPTION,
+                    broken_query=task["broken_query"],
+                    error_message="Unsafe identifier in create_index action.",
+                    current_score=self._current_score,
+                    attempts=self._attempts,
+                    max_attempts=self._max_attempts,
+                    done=False,
+                    reward=-1.0,
+                    schema_diff=schema_diff,
+                    metadata={"error": "invalid_identifier"},
+                )
+            index_name = f"idx_{table_name}_{column_name}_{self._attempts}"
+            create_index_sql = (
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"
+            )
+            statements = [create_index_sql]
+            evaluation_query = task["broken_query"]
+            action_payload = {"query": create_index_sql}
+            schema_diff.append(create_index_sql)
+            self._created_indices.append(index_name)
+            submitted_query = create_index_sql
 
         if self._is_destructive(submitted_query):
             self._current_score = 0.0
+            final_value = -5.0
             return SQLObservation(
                 task_id=self._current_task_id,
                 schema_description=SCHEMA_DESCRIPTION,
@@ -425,11 +461,19 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=True,
-                reward=0.01,
-                metadata={"destructive": True},
+                reward=final_value,
+                schema_diff=schema_diff,
+                metadata={
+                    "value": final_value,
+                    "correctness": -1.0,
+                    "efficiency": 0.0,
+                    "style": 0.0,
+                    "anticheat": -5.0,
+                    "done": True,
+                    "info": {"destructive": True},
+                },
             )
 
-        statements = [s.strip() for s in submitted_query.split(";") if s.strip()]
         is_valid_sql = True
         execution_error = None
 
@@ -437,7 +481,8 @@ class SQLOptimizerEnvironment(Environment):
             try:
                 cur = self._conn.cursor()
                 cur.execute(stmt)
-                cur.fetchall()
+                if cur.description is not None:
+                    cur.fetchall()
                 match = re.search(
                     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)",
                     stmt,
@@ -445,16 +490,42 @@ class SQLOptimizerEnvironment(Environment):
                 )
                 if match:
                     self._created_indices.append(match.group(1))
-            except sqlite3.Error as e:
+                self._conn.commit()
+            except psycopg2.Error as e:
+                self._conn.rollback()
                 is_valid_sql = False
-                execution_error = str(e)
+                execution_error = str(e).strip()
                 break
-
-        self._conn.commit()
 
         if not is_valid_sql:
             self._drop_created_indices()
             done = self._attempts >= self._max_attempts
+            baseline_trace = _explain_analyze_json(self._conn, task["broken_query"])
+            failed_trace = {
+                "execution_time_ms": 99999.0,
+                "plan": {},
+                "total_cost": 99999.0,
+            }
+            try:
+                rewards = calculate_all_rewards(
+                    baseline_trace=baseline_trace,
+                    new_trace=failed_trace,
+                    action_taken=action_payload,
+                    results_match=False,
+                )
+                final_value = rewards["total"]
+                reward_errors = None
+            except Exception as exc:
+                final_value = -1.0
+                rewards = {
+                    "correctness": -1.0,
+                    "efficiency": -1.0,
+                    "style": 0.0,
+                    "anticheat": 0.0,
+                    "total": final_value,
+                }
+                reward_errors = str(exc)
+            self._current_score = final_value
             return SQLObservation(
                 task_id=self._current_task_id,
                 schema_description=SCHEMA_DESCRIPTION,
@@ -464,50 +535,52 @@ class SQLOptimizerEnvironment(Environment):
                 attempts=self._attempts,
                 max_attempts=self._max_attempts,
                 done=done,
-                reward=0.01,
-                metadata={"is_valid_sql": False},
+                reward=final_value,
+                metadata={
+                    "value": final_value,
+                    "correctness": rewards["correctness"],
+                    "efficiency": rewards["efficiency"],
+                    "style": rewards["style"],
+                    "anticheat": rewards["anticheat"],
+                    "is_valid_sql": False,
+                    "done": done,
+                    "info": {
+                        "reward_errors": reward_errors,
+                    },
+                },
+                schema_diff=schema_diff,
             )
 
         cur = self._conn.cursor()
         semantic_match, _, _ = self._verify_semantic_equivalence(
-            cur, task["expected_query"], submitted_query
+            cur, task["expected_query"], evaluation_query
         )
-        correctness = 1.0 if semantic_match else 0.0
 
-        if not semantic_match and self._current_task_id == "easy_fix_select":
-            try:
-                cur.execute(submitted_query)
-                rows = cur.fetchall()
-                if rows and len(rows) > 0:
-                    correctness = 0.2
-            except sqlite3.Error:
-                pass
+        initial_explain = _explain_analyze_json(self._conn, task["broken_query"])
+        new_explain = _explain_analyze_json(self._conn, evaluation_query)
+        try:
+            rewards = calculate_all_rewards(
+                baseline_trace=initial_explain,
+                new_trace=new_explain,
+                action_taken=action_payload,
+                results_match=semantic_match,
+            )
+            reward_errors = None
+        except Exception as exc:
+            rewards = {
+                "correctness": 1.0 if semantic_match else -1.0,
+                "efficiency": 0.0,
+                "style": 0.0,
+                "anticheat": 0.0,
+                "total": -1.0 if not semantic_match else 0.0,
+            }
+            reward_errors = str(exc)
 
-        initial_cost = _calculate_query_cost(self._conn, task["broken_query"])
-        new_cost = _calculate_query_cost(self._conn, submitted_query)
-
-        if initial_cost > 0:
-            efficiency = max(0.0, min(1.0, (initial_cost - new_cost) / initial_cost))
-        else:
-            efficiency = 1.0 if new_cost <= initial_cost else 0.0
-
-        uses_cte = self._has_cte_or_window(submitted_query)
-        formula = task["score_formula"]
-        if self._current_task_id == "hard_subquery_optimize":
-            base_score = formula(correctness, efficiency, is_valid_sql, uses_cte)
-        else:
-            base_score = formula(correctness, efficiency, is_valid_sql)
-
-        improvement_bonus = max(0, base_score - self._previous_score) * 0.2
-        attempt_ratio = self._attempts / self._max_attempts
-        speed_bonus = 0.1 * (1 - attempt_ratio) if correctness == 1.0 else 0
-        final_value = min(1.0, base_score + improvement_bonus + speed_bonus)
-        # Clamp to strictly (0, 1) — validator requires 0 < score < 1
-        final_value = max(0.01, min(0.99, final_value))
+        final_value = rewards["total"]
+        self._previous_score = self._current_score
         self._current_score = final_value
-        self._previous_score = base_score
 
-        done = self._attempts >= self._max_attempts or final_value >= 0.95
+        done = self._attempts >= self._max_attempts or rewards["correctness"] >= 1.0
         self._drop_created_indices()
 
         return SQLObservation(
@@ -520,30 +593,38 @@ class SQLOptimizerEnvironment(Environment):
             max_attempts=self._max_attempts,
             done=done,
             reward=final_value,
+            schema_diff=schema_diff,
             metadata={
                 "value": final_value,
-                "correctness": correctness,
-                "efficiency": efficiency,
+                "correctness": rewards["correctness"],
+                "efficiency": rewards["efficiency"],
+                "style": rewards["style"],
+                "anticheat": rewards["anticheat"],
                 "is_valid_sql": is_valid_sql,
                 "done": done,
                 "info": {
-                    "initial_cost": initial_cost,
-                    "new_cost": new_cost,
+                    "initial_execution_time_ms": initial_explain["execution_time_ms"],
+                    "new_execution_time_ms": new_explain["execution_time_ms"],
+                    "initial_cost": initial_explain["total_cost"],
+                    "new_cost": new_explain["total_cost"],
+                    "initial_plan": initial_explain["plan"],
+                    "new_plan": new_explain["plan"],
                     "semantic_match": semantic_match,
-                    "uses_cte_or_window": uses_cte,
-                    "improvement_bonus": improvement_bonus,
-                    "speed_bonus": speed_bonus,
+                    "uses_cte_or_window": self._has_cte_or_window(evaluation_query),
+                    "action_type": parsed_action.action_type,
+                    "reward_errors": reward_errors,
                 },
             },
         )
 
     @property
     def state(self) -> State:
-        """Return the current episode and step count."""
         return self._state
 
     def close(self) -> None:
-        """Close the in-memory SQLite connection and release resources."""
         if self._conn:
-            self._conn.close()
+            try:
+                self._conn.close()
+            except Exception:
+                pass
             self._conn = None

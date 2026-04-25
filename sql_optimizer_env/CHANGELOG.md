@@ -5,7 +5,80 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-04-25
+
+### Added
+- **Modular Reward System** (`env/rewards/`)
+  - Introduced isolated reward modules with strict interfaces:
+    - `base.py`: abstract `BaseReward.calculate(...)` contract
+    - `correctness.py`: binary semantic signal (`1.0` match, `-1.0` mismatch)
+    - `efficiency.py`: continuous execution-time delta reward in `[-1.0, 1.0]`
+    - `style.py`: SQL quality heuristic reward (`0.5` or `0.0`)
+    - `anticheat.py`: strong penalty for unsafe SQL (`-5.0`)
+  - Added reward orchestrator in `env/rewards/__init__.py` to compute all
+    dimensions independently and aggregate total reward with explicit errors.
+
+- **Discriminated Action Space** (`models.py`)
+  - Replaced generic `SQLAction` with strict action variants:
+    - `RewriteQueryAction(action_type="rewrite_query", new_sql)`
+    - `CreateIndexAction(action_type="create_index", table_name, column_name)`
+  - Added `AgentAction` discriminated union via `Field(discriminator="action_type")`.
+  - Extended `SQLObservation` with `schema_diff: list[str]` for schema drift/index tracking.
+
+- **Schema Drift Chaos Layer** (`env/schema_drift.py`)
+  - Added `SchemaDrifter` for reset-time chaos mutations against PostgreSQL:
+    - drop random non-primary index
+    - toggle `reviews.rating` ↔ `reviews.stars`
+    - alter `products.name` to `TEXT`
+  - Added `heal_schema()` to repair schema via DDL-only changes (no reseeding).
+
+### Changed
+- **Environment Integration**
+  - `reset()` now includes a 20% schema-drift trigger and reports drift events in observation `schema_diff`
+  - `step()` now parses discriminated `AgentAction` payloads and executes action-specific paths for SQL rewrite vs index creation
+  - Reward computation in `step()` moved to the modular 4-signal reward stack with per-signal metadata (`correctness`, `efficiency`, `style`, `anticheat`)
+
+## [2.0.0] - 2026-04-25
+
+### Added
+- **Major Migration**: SQLite → PostgreSQL for production-grade database workloads
+  - Replaced `sqlite3` with `psycopg2` for database connectivity
+  - Connection string: `postgresql://admin:admin@localhost:5432/dbre_env`
+  - Schema DDL updated for PostgreSQL syntax (`SERIAL`, `TIMESTAMP`, `NUMERIC`)
+
+- **Query Analysis**: Rewrote cost estimation to use `EXPLAIN (ANALYZE, FORMAT JSON)`
+  - Replaced heuristics-based `_calculate_query_cost()` with JSON-parsing `_explain_analyze_json()`
+  - Extracts `Execution Time` and `Total Cost` from PostgreSQL's native query planner
+  - Returns structured dict with `execution_time_ms`, `plan`, and `total_cost`
+
+- **Data Seeding**: Complete rewrite using PostgreSQL `generate_series()`
+  - Eliminated all Python loops from `_seed_data()`
+  - Server-side generation scales to larger datasets:
+    - 10,000 customers (was 100)
+    - 5,000 products (was 50)
+    - 100,000 orders (was 300)
+    - 500,000 order_items (was 600)
+    - 50,000 reviews (was 200)
+
+### Added
+- **Workload Generator** (`env/workload_generator.py`)
+  - New `WorkloadGenerator` class for dynamic slow query injection
+  - `generate_slow_query()` returns randomized unoptimized SQL from 3 templates:
+    1. **N+1 Join Trap**: Multi-table join with `LIKE '%Product_%'` filter on unindexed text column
+    2. **Sequential Scan**: Aggregation on `order_items.unit_price` forcing full table scan
+    3. **Bad Subquery**: `WHERE IN (SELECT...)` anti-pattern on reviews table
+  - Each template includes randomized parameters (cities, price thresholds, ratings)
+
+- **Environment Integration**
+  - `reset()` method now supports `use_workload_generator: bool` parameter
+  - When enabled, environment generates dynamic slow queries instead of hardcoded TASKS
+  - Maintains backward compatibility with existing task IDs
+
+### Dependencies
+- Added `psycopg2-binary>=2.9.0` to `pyproject.toml` and `Dockerfile`
+- Dockerfile updated to install `libpq5` instead of `sqlite3`
+
+## [1.0.0] - 2026-04-08
 
 ### Added
 - 3-task system (Easy/Medium/Hard) aligned with team design doc

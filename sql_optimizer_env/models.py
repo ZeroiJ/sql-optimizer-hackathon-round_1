@@ -1,6 +1,6 @@
 """Pydantic models for the SQL Query Optimizer RL Environment."""
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union, Annotated, Literal
 from pydantic import Field
 
 try:
@@ -9,13 +9,29 @@ except ImportError:
     from openenv.core.env_server.types import Action, Observation
 
 
-class SQLAction(Action):
-    """Action taken by the agent to fix/optimize a SQL query."""
+class RewriteQueryAction(Action):
+    """Action to rewrite and submit a full SQL query."""
 
-    query: str = Field(
-        ...,
-        description="The SQL query the agent submits (may include CREATE INDEX separated by semicolons)",
+    action_type: Literal["rewrite_query"] = Field(
+        ..., description="Discriminator for rewrite query actions"
     )
+    new_sql: str = Field(..., description="The rewritten SQL query to execute")
+
+
+class CreateIndexAction(Action):
+    """Action to create an index for optimization."""
+
+    action_type: Literal["create_index"] = Field(
+        ..., description="Discriminator for create index actions"
+    )
+    table_name: str = Field(..., description="Target table name for index creation")
+    column_name: str = Field(..., description="Target column name for index creation")
+
+
+AgentAction = Annotated[
+    Union[RewriteQueryAction, CreateIndexAction],
+    Field(discriminator="action_type"),
+]
 
 
 class SQLObservation(Observation):
@@ -35,6 +51,10 @@ class SQLObservation(Observation):
     attempts: int = Field(default=0, description="How many attempts agent has made")
     max_attempts: int = Field(
         default=5, description="Max attempts allowed for this task"
+    )
+    schema_diff: list[str] = Field(
+        default_factory=list,
+        description="Schema drift/index changes applied in the current episode",
     )
 
 

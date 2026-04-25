@@ -3,7 +3,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sqlite3 \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir \
     "requests>=2.31.0" \
     "huggingface-hub>=0.20.0" \
     "transformers>=4.36.0" \
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0" \
+    "psycopg2-binary>=2.9.0"
 
 ENV PYTHONPATH=/app
 

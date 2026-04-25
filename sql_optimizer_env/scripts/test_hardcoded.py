@@ -9,9 +9,9 @@ running the LLM inference script.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sql_optimizer_env.env.sql_optimizer import SQLOptimizerEnv
+from sql_optimizer_env.server.sql_optimizer_environment import SQLOptimizerEnvironment
 from sql_optimizer_env.models import SQLAction
 
 
@@ -37,7 +37,7 @@ TASKS = [
 
 def main():
     """Run all hardcoded test cases against the SQL Optimizer environment."""
-    env = SQLOptimizerEnv()
+    env = SQLOptimizerEnvironment()
 
     for task in TASKS:
         task_id = task["task_id"]
