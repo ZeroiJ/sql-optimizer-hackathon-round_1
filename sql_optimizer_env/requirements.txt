@@ -1,5 +1,4 @@
-gradio==4.44.1
-huggingface_hub==0.25.2
+gradio==4.44.0
 openenv-core[core]>=0.2.2
 fastapi>=0.115.0
 pydantic>=2.0.0
