@@ -3,7 +3,8 @@ title: SQL Query Optimizer
 emoji: 🗄️
 colorFrom: blue
 colorTo: indigo
-sdk: docker
+sdk: gradio
+python_version: 3.10
 pinned: false
 tags:
   - openenv
