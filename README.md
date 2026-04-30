@@ -17,6 +17,8 @@ tags:
 
 > **📜 For Judges:** See [JUDGES_GUIDE.md](./JUDGES_GUIDE.md) for detailed grading mechanics, anti-hallucination strategies, and cloud verification steps.
 
+![Tests](https://github.com/ZeroiJ/sql-optimizer-hackathon-round_1/actions/workflows/test.yml/badge.svg)
+
 A Reinforcement Learning environment that trains AI agents to fix and optimize SQL queries — simulating a real-world Database Administration (DBA) task on a SQLite e-commerce database.
 
 ---
@@ -144,6 +146,22 @@ sql_optimizer_env/
 
 ---
 
+## Quick Smoke Test
+
+Use SQLite fallback to run locally without PostgreSQL:
+
+```bash
+USE_SQLITE=1 python -c "from sql_optimizer_env.server.sql_optimizer_environment import SQLOptimizerEnvironment; from sql_optimizer_env.models import RewriteQueryAction; env = SQLOptimizerEnvironment(); obs = env.reset(); print('Initial broken query:', obs.broken_query[:100]); print('Initial reward:', obs.reward); res = env.step(RewriteQueryAction(action_type='rewrite_query', new_sql='SELECT customer_id FROM customers;')); print('Reward after step:', res.reward); assert 0.0 <= res.reward <= 1.0; print('OK')"
+```
+
+Run tests:
+
+```bash
+USE_SQLITE=1 pytest tests/ -v
+```
+
+---
+
 ## License
 
-Meta PyTorch OpenEnv Hackathon — Team Project
+MIT. See `LICENSE`.
