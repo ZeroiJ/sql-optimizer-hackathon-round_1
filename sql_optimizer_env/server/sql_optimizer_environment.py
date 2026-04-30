@@ -376,8 +376,10 @@ class SQLOptimizerEnvironment(Environment):
 
     SUPPORTS_CONCURRENT_SESSIONS = True
 
-    def __init__(self):
+    def __init__(self, seed: Optional[int] = None, **kwargs: Any):
         super().__init__()
+        seed_value = seed if seed is not None else int(os.environ.get("TEST_SEED", 42))
+        self.rng = random.Random(seed_value)
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._conn = None
         self._db_type = "postgres"
@@ -387,6 +389,59 @@ class SQLOptimizerEnvironment(Environment):
         self._current_score: float = 0.0
         self._previous_score: float = 0.0
         self._created_indices: List[str] = []
+        self.current_query: str = ""
+        self.original_query: str = ""
+
+    def _generate_broken_query(self) -> str:
+        """Generate a random broken query each episode."""
+        templates = [
+            "SELECT {col} FORM {table} WHERE {condition}",
+            "SELECT {col} FROM {table} WERE {condition}",
+            "SELECT * FROM {table1}, {table2}",
+            "SELECT {col1}, {col2} FROM {table1}, {table2}",
+            "SELECT {wrong_col} FROM {table}",
+            "SELECT * FROM {table} WHERE {col} = {val} OR {col} = {val}",
+            "SELECT * FROM {table}",
+        ]
+
+        tables = ["customers", "orders", "products"]
+        cols = {
+            "customers": ["customer_id", "name", "email", "city"],
+            "orders": ["order_id", "customer_id", "status", "order_date"],
+            "products": ["product_id", "name", "price", "category"],
+        }
+
+        template = self.rng.choice(templates)
+
+        if "FORM" in template or "WERE" in template:
+            table = self.rng.choice(tables)
+            col = self.rng.choice(cols[table])
+            condition = f"{col} > {self.rng.randint(1, 100)}"
+            return template.format(col=col, table=table, condition=condition)
+        if "{table1}, {table2}" in template:
+            t1, t2 = self.rng.sample(tables, 2)
+            col1 = self.rng.choice(cols[t1])
+            col2 = self.rng.choice(cols[t2])
+            return template.format(table1=t1, table2=t2, col1=col1, col2=col2)
+        if "{wrong_col}" in template:
+            table = self.rng.choice(tables)
+            all_cols = [
+                "customer_id",
+                "order_id",
+                "product_id",
+                "amount",
+                "price",
+                "email",
+                "status",
+            ]
+            wrong_candidates = [c for c in all_cols if c not in cols[table]]
+            wrong_col = self.rng.choice(wrong_candidates)
+            return template.format(wrong_col=wrong_col, table=table)
+
+        table = self.rng.choice(tables)
+        col = self.rng.choice(cols[table])
+        val = self.rng.randint(1, 100)
+        return template.format(table=table, col=col, val=val)
 
     def _setup_database(self) -> None:
         if self._conn:
@@ -511,10 +566,13 @@ class SQLOptimizerEnvironment(Environment):
         self._current_score = 0.0
         self._previous_score = 0.0
         self._state = State(episode_id=episode_id or str(uuid4()), step_count=0)
+        self.current_query = self._generate_broken_query()
+        self.original_query = self.current_query
+
         return SQLObservation(
             task_id=task_id,
             schema_description=SCHEMA_DESCRIPTION,
-            broken_query=task["broken_query"],
+            broken_query=self.current_query,
             error_message=None,
             current_score=0.0,
             attempts=0,
@@ -546,6 +604,7 @@ class SQLOptimizerEnvironment(Environment):
             )
 
         task = self._get_task(self._current_task_id)
+        active_broken_query = self.current_query or task["broken_query"]
         schema_diff: List[str] = []
         parsed_action: AgentAction
         try:
@@ -567,7 +626,7 @@ class SQLOptimizerEnvironment(Environment):
             return SQLObservation(
                 task_id=self._current_task_id,
                 schema_description=SCHEMA_DESCRIPTION,
-                broken_query=task["broken_query"],
+                broken_query=active_broken_query,
                 error_message=f"Invalid action payload: {exc}",
                 current_score=self._current_score,
                 attempts=self._attempts,
@@ -593,7 +652,7 @@ class SQLOptimizerEnvironment(Environment):
                 return SQLObservation(
                     task_id=self._current_task_id,
                     schema_description=SCHEMA_DESCRIPTION,
-                    broken_query=task["broken_query"],
+                    broken_query=active_broken_query,
                     error_message="Unsafe identifier in create_index action.",
                     current_score=self._current_score,
                     attempts=self._attempts,
@@ -608,7 +667,7 @@ class SQLOptimizerEnvironment(Environment):
                 f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"
             )
             statements = [create_index_sql]
-            evaluation_query = task["broken_query"]
+            evaluation_query = active_broken_query
             action_payload = {"query": create_index_sql}
             schema_diff.append(create_index_sql)
             self._created_indices.append(index_name)
@@ -620,7 +679,7 @@ class SQLOptimizerEnvironment(Environment):
             return SQLObservation(
                 task_id=self._current_task_id,
                 schema_description=SCHEMA_DESCRIPTION,
-                broken_query=task["broken_query"],
+                broken_query=active_broken_query,
                 error_message="Destructive query detected.",
                 current_score=0.0,
                 attempts=self._attempts,
@@ -668,7 +727,7 @@ class SQLOptimizerEnvironment(Environment):
         if not is_valid_sql:
             self._drop_created_indices()
             done = self._attempts >= self._max_attempts
-            baseline_trace = _explain_analyze_json(self._conn, task["broken_query"])
+            baseline_trace = _explain_analyze_json(self._conn, active_broken_query)
             failed_trace = {
                 "execution_time_ms": 99999.0,
                 "plan": {},
@@ -697,7 +756,7 @@ class SQLOptimizerEnvironment(Environment):
             return SQLObservation(
                 task_id=self._current_task_id,
                 schema_description=SCHEMA_DESCRIPTION,
-                broken_query=task["broken_query"],
+                broken_query=active_broken_query,
                 error_message=execution_error,
                 current_score=self._current_score,
                 attempts=self._attempts,
@@ -724,7 +783,7 @@ class SQLOptimizerEnvironment(Environment):
             cur, task["expected_query"], evaluation_query
         )
 
-        initial_explain = _explain_analyze_json(self._conn, task["broken_query"])
+        initial_explain = _explain_analyze_json(self._conn, active_broken_query)
         new_explain = _explain_analyze_json(self._conn, evaluation_query)
         try:
             rewards = calculate_all_rewards(
@@ -754,7 +813,7 @@ class SQLOptimizerEnvironment(Environment):
         return SQLObservation(
             task_id=self._current_task_id,
             schema_description=SCHEMA_DESCRIPTION,
-            broken_query=task["broken_query"],
+            broken_query=active_broken_query,
             error_message=None,
             current_score=self._current_score,
             attempts=self._attempts,

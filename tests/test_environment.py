@@ -56,3 +56,12 @@ def test_action_model_required():
     env.reset()
     obs = env.step("just a string, not SQLAction")
     assert obs.error_message is not None
+
+
+def test_random_queries_are_different():
+    """Verify reset generates different queries."""
+    env = SQLOptimizerEnv(seed=42)
+    q1 = env.reset().broken_query
+    q2 = env.reset().broken_query
+    q3 = env.reset().broken_query
+    assert not (q1 == q2 == q3), "Reset generating same query repeatedly"
