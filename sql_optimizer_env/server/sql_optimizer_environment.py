@@ -9,6 +9,7 @@ import json
 import os
 import random
 import re
+import sqlite3
 from typing import Any, Optional, List, Tuple
 from uuid import uuid4
 
@@ -82,6 +83,7 @@ except ImportError:
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://admin:admin@localhost:5432/dbre_env"
 )
+USE_SQLITE = os.getenv("USE_SQLITE") == "1"
 
 TABLES = {
     "customers": """CREATE TABLE IF NOT EXISTS customers (
@@ -118,6 +120,44 @@ TABLES = {
         rating INTEGER CHECK(rating BETWEEN 1 AND 5),
         review_text TEXT,
         created_at TIMESTAMP DEFAULT NOW()
+    )""",
+}
+
+SQLITE_TABLES = {
+    "customers": """CREATE TABLE IF NOT EXISTS customers (
+        customer_id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        city TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""",
+    "products": """CREATE TABLE IF NOT EXISTS products (
+        product_id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        price REAL NOT NULL,
+        stock INTEGER DEFAULT 0
+    )""",
+    "orders": """CREATE TABLE IF NOT EXISTS orders (
+        order_id INTEGER PRIMARY KEY,
+        customer_id INTEGER NOT NULL,
+        order_date TEXT DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'pending'
+    )""",
+    "order_items": """CREATE TABLE IF NOT EXISTS order_items (
+        item_id INTEGER PRIMARY KEY,
+        order_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_price REAL NOT NULL
+    )""",
+    "reviews": """CREATE TABLE IF NOT EXISTS reviews (
+        review_id INTEGER PRIMARY KEY,
+        customer_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+        review_text TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""",
 }
 
@@ -171,9 +211,28 @@ def _explain_analyze_json(conn, query: str) -> dict:
         cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}")
         rows = cur.fetchall()
         conn.commit()
-    except psycopg2.Error:
-        conn.rollback()
-        return {"execution_time_ms": 99999.0, "plan": {}, "total_cost": 99999.0}
+    except Exception:
+        # SQLite fallback: use EXPLAIN QUERY PLAN and derive a coarse cost.
+        try:
+            cur = conn.cursor()
+            cur.execute(f"EXPLAIN QUERY PLAN {query}")
+            plan_rows = cur.fetchall()
+            details = " | ".join(str(r[-1]) for r in plan_rows if len(r) > 0)
+            cost = 0.0
+            upper = details.upper()
+            if "SCAN" in upper:
+                cost += 100.0
+            if "SEARCH" in upper:
+                cost += 10.0
+            if "TEMP B-TREE" in upper:
+                cost += 50.0
+            return {"execution_time_ms": cost, "plan": {"detail": details}, "total_cost": cost}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return {"execution_time_ms": 99999.0, "plan": {}, "total_cost": 99999.0}
 
     if not rows or not rows[0] or not rows[0][0]:
         return {"execution_time_ms": 99999.0, "plan": {}, "total_cost": 99999.0}
@@ -259,6 +318,49 @@ def _seed_data(conn) -> None:
     conn.commit()
 
 
+def _seed_data_sqlite(conn: sqlite3.Connection) -> None:
+    """Lightweight deterministic dataset for local tests."""
+    cur = conn.cursor()
+    cur.executemany(
+        "INSERT INTO customers (customer_id, name, email, city) VALUES (?, ?, ?, ?)",
+        [
+            (1, "Alice", "alice@example.com", "Mumbai"),
+            (2, "Bob", "bob@example.com", "Delhi"),
+            (3, "Carol", "carol@example.com", "Mumbai"),
+        ],
+    )
+    cur.executemany(
+        "INSERT INTO products (product_id, name, category, price, stock) VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, "Phone", "Electronics", 799.0, 10),
+            (2, "Book", "Books", 20.0, 100),
+        ],
+    )
+    cur.executemany(
+        "INSERT INTO orders (order_id, customer_id, status) VALUES (?, ?, ?)",
+        [
+            (1, 1, "completed"),
+            (2, 1, "completed"),
+            (3, 3, "pending"),
+        ],
+    )
+    cur.executemany(
+        "INSERT INTO order_items (item_id, order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, 1, 1, 1, 799.0),
+            (2, 2, 2, 2, 20.0),
+        ],
+    )
+    cur.executemany(
+        "INSERT INTO reviews (review_id, customer_id, product_id, rating, review_text) VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, 1, 1, 5, "Great product!"),
+            (2, 2, 2, 4, "Nice read"),
+        ],
+    )
+    conn.commit()
+
+
 class SQLOptimizerEnvironment(Environment):
     """OpenEnv environment for SQL query fixing and optimization.
 
@@ -278,6 +380,7 @@ class SQLOptimizerEnvironment(Environment):
         super().__init__()
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._conn = None
+        self._db_type = "postgres"
         self._current_task_id: Optional[str] = None
         self._attempts: int = 0
         self._max_attempts: int = 5
@@ -291,16 +394,36 @@ class SQLOptimizerEnvironment(Environment):
                 self._conn.close()
             except Exception:
                 pass
-        self._conn = psycopg2.connect(DATABASE_URL)
-        self._conn.autocommit = False
-        cur = self._conn.cursor()
-        cur.execute("DROP SCHEMA public CASCADE")
-        cur.execute("CREATE SCHEMA public")
-        self._conn.commit()
-        for ddl in TABLES.values():
-            cur.execute(ddl)
-        self._conn.commit()
-        _seed_data(self._conn)
+        if USE_SQLITE:
+            self._db_type = "sqlite"
+            self._conn = sqlite3.connect(":memory:")
+            cur = self._conn.cursor()
+            for ddl in SQLITE_TABLES.values():
+                cur.execute(ddl)
+            self._conn.commit()
+            _seed_data_sqlite(self._conn)
+            return
+
+        try:
+            self._db_type = "postgres"
+            self._conn = psycopg2.connect(DATABASE_URL)
+            self._conn.autocommit = False
+            cur = self._conn.cursor()
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+            self._conn.commit()
+            for ddl in TABLES.values():
+                cur.execute(ddl)
+            self._conn.commit()
+            _seed_data(self._conn)
+        except Exception:
+            self._db_type = "sqlite"
+            self._conn = sqlite3.connect(":memory:")
+            cur = self._conn.cursor()
+            for ddl in SQLITE_TABLES.values():
+                cur.execute(ddl)
+            self._conn.commit()
+            _seed_data_sqlite(self._conn)
 
     def _drop_created_indices(self) -> None:
         if not self._conn:
@@ -309,8 +432,11 @@ class SQLOptimizerEnvironment(Environment):
         for idx_name in self._created_indices:
             try:
                 cur.execute(f"DROP INDEX IF EXISTS {idx_name}")
-            except psycopg2.Error:
-                self._conn.rollback()
+            except (psycopg2.Error, sqlite3.Error):
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
         self._conn.commit()
         self._created_indices = []
 
@@ -320,14 +446,20 @@ class SQLOptimizerEnvironment(Environment):
         try:
             cursor.execute(expected_query)
             expected_rows = cursor.fetchall()
-        except psycopg2.Error:
-            self._conn.rollback()
+        except (psycopg2.Error, sqlite3.Error):
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
             return False, None, None
         try:
             cursor.execute(submitted_query)
             submitted_rows = cursor.fetchall()
-        except psycopg2.Error:
-            self._conn.rollback()
+        except (psycopg2.Error, sqlite3.Error):
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
             return False, expected_rows, None
         return expected_rows == submitted_rows, expected_rows, submitted_rows
 
@@ -524,8 +656,11 @@ class SQLOptimizerEnvironment(Environment):
                 if match:
                     self._created_indices.append(match.group(1))
                 self._conn.commit()
-            except psycopg2.Error as e:
-                self._conn.rollback()
+            except (psycopg2.Error, sqlite3.Error) as e:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
                 is_valid_sql = False
                 execution_error = str(e).strip()
                 break
