@@ -23,28 +23,61 @@ except ImportError:
     from openenv.core.env_server.interfaces import Environment
     from openenv.core.env_server.types import State
 
+from sql_optimizer_env.models import (
+    AgentAction,
+    CreateIndexAction,
+    RewriteQueryAction,
+    SQLObservation,
+)
+
 try:
-    from ..models import (
-        AgentAction,
-        CreateIndexAction,
-        RewriteQueryAction,
-        SQLObservation,
-        SQLReward,
-    )
-    from ..env.workload_generator import WorkloadGenerator
-    from ..env.schema_drift import SchemaDrifter
-    from ..env.rewards import calculate_all_rewards
+    from sql_optimizer_env.env.workload_generator import WorkloadGenerator
+    from sql_optimizer_env.env.schema_drift import SchemaDrifter
+    from sql_optimizer_env.env.rewards import calculate_all_rewards
 except ImportError:
-    from models import (
-        AgentAction,
-        CreateIndexAction,
-        RewriteQueryAction,
-        SQLObservation,
-        SQLReward,
-    )
-    from env.workload_generator import WorkloadGenerator
-    from env.schema_drift import SchemaDrifter
-    from env.rewards import calculate_all_rewards
+    # Legacy env/ package was removed. Keep lightweight fallbacks so imports and
+    # core reset/step flows continue to work without optional components.
+    class WorkloadGenerator:
+        def __init__(self, seed: Optional[int] = None):
+            self._seed = seed
+
+        def generate_slow_query(self) -> dict:
+            return {
+                "task_id": "medium_slow_join",
+                "max_attempts": 7,
+                "broken_query": "SELECT customers.name, orders.order_id, orders.status FROM customers, orders WHERE orders.status = 'completed'",
+                "expected_query": "SELECT customers.name, orders.order_id, orders.status FROM customers JOIN orders ON customers.customer_id = orders.customer_id WHERE orders.status = 'completed'",
+                "score_formula": lambda c, e, v: 0.5 * c + 0.3 * e + 0.2 * float(v),
+            }
+
+    class SchemaDrifter:
+        def __init__(self, seed: Optional[int] = None):
+            self._seed = seed
+
+        def trigger_random_drift(self) -> str:
+            return "schema_drift_skipped"
+
+    def calculate_all_rewards(
+        baseline_trace: dict,
+        new_trace: dict,
+        action_taken: dict[str, str],
+        results_match: bool,
+    ) -> dict[str, float]:
+        correctness = 1.0 if results_match else 0.0
+        baseline = float(baseline_trace.get("execution_time_ms", 99999.0))
+        current = float(new_trace.get("execution_time_ms", 99999.0))
+        if baseline > 0 and baseline < 99999.0 and current < 99999.0:
+            efficiency = max(0.0, min(1.0, (baseline - current) / baseline))
+        else:
+            efficiency = 0.0
+        total = max(0.0, min(1.0, 0.7 * correctness + 0.3 * efficiency))
+        return {
+            "correctness": correctness,
+            "efficiency": efficiency,
+            "style": 0.0,
+            "anticheat": 0.0,
+            "total": total,
+        }
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://admin:admin@localhost:5432/dbre_env"
@@ -628,3 +661,7 @@ class SQLOptimizerEnvironment(Environment):
             except Exception:
                 pass
             self._conn = None
+
+
+# Backward-compatible alias used by scripts/tests.
+SQLOptimizerEnv = SQLOptimizerEnvironment
