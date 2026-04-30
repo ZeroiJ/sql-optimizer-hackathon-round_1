@@ -9,4 +9,5 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install -e ".[dev]"
-      - run: pytest tests/ -v
+        working-directory: sql_optimizer_env
+      - run: USE_SQLITE=1 pytest tests/ -v
